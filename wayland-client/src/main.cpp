@@ -140,14 +140,11 @@ static MainWindow* g_mainWindow = nullptr;
 WindowTracker* g_windowTracker = nullptr;
 
 static bool g_app_excluded = false;
+static bool g_terminal_app = false;
 
 static void reset_composition(WaylandState* state, bool clear_client_preedit = false) {
     Bamboo_Reset();
     if (state) {
-        if (clear_client_preedit && state->context && !state->composed_word.empty()) {
-            zwp_input_method_context_v1_preedit_string(
-                state->context, state->latest_serial, "", "");
-        }
         state->composed_word.clear();
     }
 }
@@ -435,81 +432,24 @@ static void process_keyboard_key(WaylandState* state, uint32_t serial,
     ss_viet << "DEBUG: viet_mode=" << state->viet_mode;
     log_to_file(ss_viet.str());
 
-    if (!state->viet_mode) {
+    if (!state->viet_mode || g_terminal_app || state->content_purpose == 12) {
         log_to_file("DEBUG: Forwarding in E mode");
         reset_composition(state, true);
         zwp_input_method_context_v1_key(state->context, serial, time, key, state_key);
         return;
     }
 
+    // Let the client own both Backspace press and release, including repeat.
+    if (key == 14) {
+        reset_composition(state);
+        state->recent_tails.clear();
+        state->has_surrounding_text = false;
+        zwp_input_method_context_v1_key(state->context, serial, time, key, state_key);
+        return;
+    }
+
     if (c != 0) {
-        if (state->content_purpose == 12 || g_app_excluded) {
-            // Preedit mode (Konsole, Kitty, Alacritty, or user-excluded apps)
-            // Sử dụng Bamboo CGO
-            if (c == '\b') {
-                char* old_preedit = Bamboo_GetPreeditString();
-                bool was_empty = (!old_preedit || strlen(old_preedit) == 0);
-                if (old_preedit) free(old_preedit);
-                
-                if (was_empty) {
-                    zwp_input_method_context_v1_key(state->context, serial, time, key, state_key);
-                    return;
-                }
-                Bamboo_RemoveLastChar();
-                
-                char* new_preedit = Bamboo_GetPreeditString();
-                uint32_t byte_len = new_preedit ? strlen(new_preedit) : 0;
-                
-                if (byte_len == 0) {
-                    zwp_input_method_context_v1_preedit_string(state->context, state->latest_serial, "", "");
-                } else {
-                    zwp_input_method_context_v1_preedit_cursor(state->context, byte_len);
-                    zwp_input_method_context_v1_preedit_styling(state->context, 0, byte_len, 5);
-                    zwp_input_method_context_v1_preedit_string(state->context, state->latest_serial, new_preedit, new_preedit);
-                }
-                state->composed_word = new_preedit ? new_preedit : "";
-                if (new_preedit) free(new_preedit);
-                eaten_keys.insert(key);
-                return;
-            }
-            
-            if (!Bamboo_CanProcessKey(c)) {
-                std::string final_commit = bamboo_string(true);
-                
-                // Gõ tắt (Macro)
-                if (g_mainWindow && g_mainWindow->isMacroEnabled()) {
-                    const auto& macros = g_mainWindow->getMacros();
-                    auto macro = macros.find(final_commit);
-                    if (macro != macros.end()) {
-                        final_commit = macro->second;
-                    }
-                }
-                
-                if (final_commit.length() > 0) {
-                    zwp_input_method_context_v1_commit_string(state->context, state->latest_serial, final_commit.c_str());
-                }
-                reset_composition(state);
-                
-                zwp_input_method_context_v1_key(state->context, serial, time, key, state_key);
-                return;
-            } else {
-                Bamboo_ProcessKey(c);
-                char* preedit_str = Bamboo_GetPreeditString();
-                uint32_t byte_len = strlen(preedit_str);
-                
-                std::stringstream ss;
-                ss << "DEBUG: PREEDIT SENDING TO KONSOLE: '" << preedit_str << "' len=" << byte_len;
-                log_to_file(ss.str());
-                
-                zwp_input_method_context_v1_preedit_cursor(state->context, byte_len);
-                zwp_input_method_context_v1_preedit_styling(state->context, 0, byte_len, 5);
-                zwp_input_method_context_v1_preedit_string(state->context, state->latest_serial, preedit_str, preedit_str);
-                state->composed_word = preedit_str;
-                free(preedit_str);
-                eaten_keys.insert(key);
-                return;
-            }
-        } else {
+        {
             // Normal Mode (Chrome, Gtk, Qt apps) - Use Bamboo Diffing
             if (has_fresh_surrounding(state) &&
                 !composition_matches_surrounding(state->surrounding_text,
@@ -519,13 +459,7 @@ static void process_keyboard_key(WaylandState* state, uint32_t serial,
                 reset_composition(state);
             }
 
-            if (c == '\b') {
-                if (state->composed_word.empty()) {
-                    zwp_input_method_context_v1_key(state->context, serial, time, key, state_key);
-                    return;
-                }
-                Bamboo_RemoveLastChar();
-            } else if (!Bamboo_CanProcessKey(c)) {
+            if (!Bamboo_CanProcessKey(c)) {
                 std::string final_word = bamboo_string(true);
                 const bool had_composition = !state->composed_word.empty();
                 
@@ -558,18 +492,8 @@ static void process_keyboard_key(WaylandState* state, uint32_t serial,
             return;
         }
     } else {
-        // c == 0 (Phím chức năng, phím tắt Ctrl, Alt, Arrow, Esc...)
-        if (state->content_purpose == 12 || g_app_excluded) {
-            std::string final_commit = bamboo_string(true);
-            if (!final_commit.empty()) {
-                zwp_input_method_context_v1_commit_string(
-                    state->context, state->latest_serial, final_commit.c_str());
-            }
-            reset_composition(state);
-        } else {
-            reset_composition(state);
-            clear_pending_edit(state);
-        }
+        reset_composition(state);
+        clear_pending_edit(state);
     }
     
     // If we didn't handle it (or if it was a backspace/unhandled), forward it to the client
@@ -833,7 +757,9 @@ int main(int argc, char **argv) {
     WaylandState state = {};
     QTimer drainTimer;
     drainTimer.setSingleShot(true);
-    drainTimer.setInterval(1);
+    // Drain as soon as the event loop is idle. A 1 ms timer adds visible
+    // latency when every composition edit is waiting for a client ACK.
+    drainTimer.setInterval(0);
     state.drain_timer = &drainTimer;
     QObject::connect(&drainTimer, &QTimer::timeout,
                      [&state]() { drain_queued_keys(&state); });
@@ -867,9 +793,16 @@ int main(int argc, char **argv) {
     WindowTracker windowTracker;
     g_windowTracker = &windowTracker;
     QObject::connect(&windowTracker, &WindowTracker::activeWindowChangedSignal, [&](const QString& windowClass) {
+        const bool was_terminal = g_terminal_app;
+        const QString appId = windowClass.section("|||", 0, 0).toLower();
+        const QStringList terminals = {"kitty", "alacritty", "konsole", "org.kde.konsole",
+            "gnome-terminal", "org.gnome.terminal", "org.gnome.ptyxis", "ptyxis",
+            "org.gnome.console", "kgx", "xfce4-terminal", "lxterminal", "foot",
+            "footclient", "wezterm", "org.wezfurlong.wezterm"};
+        g_terminal_app = terminals.contains(appId);
         const bool was_excluded = g_app_excluded;
         g_app_excluded = windowTracker.isAppExcluded(windowClass.toStdString());
-        if (was_excluded != g_app_excluded) {
+        if (was_excluded != g_app_excluded || was_terminal != g_terminal_app) {
             state.queued_keys.clear();
             state.recent_tails.clear();
             if (state.drain_timer) state.drain_timer->stop();

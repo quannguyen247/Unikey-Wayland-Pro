@@ -73,19 +73,12 @@ cp "$REPO_DIR/io.github.ubuntu2310fake.UnikeyWayland.desktop" "$HOME/.local/shar
 cp "$REPO_DIR/io.github.ubuntu2310fake.UnikeyWayland.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/"
 update-desktop-database "$HOME/.local/share/applications/" 2>/dev/null || true
 
-# Tạo default preedit_apps.txt nếu chưa có
+# Giữ danh sách legacy rỗng cho bản cài mới. Wayland client hiện tại luôn
+# dùng direct commit/raw passthrough và không dùng file này để bật preedit.
+# Không ghi đè cấu hình người dùng đã tồn tại (IBus vẫn có thể đọc file này).
 mkdir -p "$HOME/UnikeyWayland"
 if [ ! -f "$HOME/UnikeyWayland/preedit_apps.txt" ]; then
-    cat << 'APPS' > "$HOME/UnikeyWayland/preedit_apps.txt"
-kitty
-alacritty
-konsole
-gnome-terminal
-xfce4-terminal
-lxterminal
-android-studio
-java
-APPS
+    touch "$HOME/UnikeyWayland/preedit_apps.txt"
 fi
 
 # Cấu hình KWin Wayland

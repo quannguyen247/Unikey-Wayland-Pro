@@ -1,159 +1,334 @@
 # Unikey-Wayland
 
-Bộ gõ tiếng Việt đa nền tảng tối ưu hóa cho môi trường **KDE Plasma Wayland** (phiên bản gốc) và nay đã hỗ trợ chạy native trên hệ điều hành **Windows (Windows Edition)**.
+Unikey-Wayland là bộ gõ tiếng Việt mã nguồn mở, gồm các backend riêng cho
+từng môi trường:
 
-Mặc dù dự án khởi nguồn từ việc nghiên cứu mã nguồn của UniKey, nhưng hiện tại **toàn bộ logic gõ tiếng Việt cốt lõi đã được thay thế và sử dụng hoàn toàn bằng Bamboo Engine**. Giao diện cấu hình được viết mới bằng **Qt 6**.
+- **Wayland client** cho Linux, được thiết kế trước hết cho KDE Plasma/KWin.
+- **IBus engine** tùy chọn cho các phiên GNOME Wayland và X11.
+- **Windows Edition** với bộ bắt phím mức thấp của Win32.
 
-Giao diện cấu hình chia Tab và quản lý gõ tắt được thiết kế dựa trên nguồn cảm hứng từ EVKey/UniKey truyền thống nhưng loại bỏ các thiết lập không tương thích với cơ chế của Wayland (như khởi động cùng Windows, quyền Admin, v.v.).
+Phần xử lý tiếng Việt dùng [Bamboo Engine](wayland-client/src/vendor/github.com/BambooEngine/bamboo-core),
+còn giao diện cấu hình dùng Qt 6. Linux biên dịch Bamboo thành C archive qua
+CGO; Windows nạp `bamboo.dll` lúc chạy.
 
-> [!WARNING]
-> ~~**BẮT BUỘC SỬ DỤNG KDE PLASMA** (Wayland session). Giao thức input method grab bàn phím hoạt động tối ưu nhất trên bộ quản lý cửa sổ KWin của KDE.~~
-> 
-> **Hiện tại đã hỗ trợ mọi Desktop Environment** (KDE Plasma, GNOME, X11, Sway, Window Managers...) và **hỗ trợ song song cả hai kiến trúc x86_64 & ARM64 (aarch64)** nhờ việc tích hợp song song cả Native Wayland Protocol, IBus Engine và tối ưu hóa biên dịch ngoại tuyến.
+> README này mô tả đúng hành vi của mã nguồn hiện tại. Các ghi chú trong
+> `CHANGELOG.md` có thể nói về hành vi của những phiên bản cũ.
 
-## Hướng Dẫn Kích Hoạt Sau Khi Cài Đặt
+## Hành vi quan trọng của bản Wayland hiện tại
 
-### 1. Trên KDE Plasma (Wayland Session)
-Sau khi cài đặt gói tương ứng cho distro của bạn, hãy làm theo các bước sau để kích hoạt bộ gõ:
-1. Mở **System Settings** (Cài đặt hệ thống).
-2. Tìm đến mục **Keyboard** (Bàn phím) -> **Virtual Keyboard** (Bàn phím ảo).
-3. Chọn **Unikey-Wayland** (hoặc tích chọn để kích hoạt nó).
-4. Nhấn **Apply**.
-5. Nhấp đúp chuột vào biểu tượng chữ **V/E** ở khay hệ thống (System Tray) hoặc nhấn tổ hợp phím `Ctrl + Shift + F5` để mở Bảng điều khiển cấu hình bộ gõ.
+Đây là phần cần biết trước khi cài:
 
-### 2. Trên GNOME Wayland & Môi trường X11 (Sử dụng IBus Engine)
-Do GNOME sử dụng IBus làm nền tảng gõ mặc định, gói cài đặt đã bao gồm sẵn một IBus Engine tương thích.
-1. Mở **Settings** (Cài đặt) -> **Keyboard** (Bàn phím).
-2. Tại mục *Input Sources*, nhấn dấu cộng (+) và thêm bộ gõ **Vietnamese (Unikey-Wayland)**.
-3. Đảm bảo biến môi trường `GTK_IM_MODULE=ibus` và `QT_IM_MODULE=ibus` được hệ thống kích hoạt.
-4. Chuyển đổi bộ gõ bằng phím tắt `Super + Space`.
-5. Bạn có thể mở Bảng điều khiển bằng cách chuột phải vào biểu tượng IBus trên thanh Top Bar (Khay hệ thống) và chọn **Preferences**.
+1. Với ứng dụng văn bản thông thường, Wayland client dùng **direct commit**:
+   nó tính phần thay đổi theo ranh giới UTF-8, gửi xóa/chèn qua surrounding
+   text rồi commit trực tiếp. Nó **không gửi** các sự kiện
+   `preedit_string`, `preedit_styling` hoặc `preedit_cursor`, vì vậy chữ đang
+   gõ không bị gạch chân bởi bộ gõ.
+2. Khi cửa sổ hiện tại là terminal, hoặc ứng dụng báo
+   `content_purpose == terminal` (giá trị 12), Wayland client chuyển sang
+   **raw passthrough**: cả phím nhấn, phím nhả và phím lặp được trả thẳng cho
+   terminal (ngoại trừ các phím tắt của bộ gõ); Bamboo không xử lý. Vì vậy
+   Telex/VNI/VIQR của backend Wayland
+   **cố ý không hoạt động trong terminal**. Đây là lựa chọn an toàn để không
+   làm hỏng dòng lệnh, autocomplete hoặc Backspace.
+3. Danh sách terminal được nhận diện trong source gồm `kitty`, `alacritty`,
+   `konsole`, `org.kde.konsole`, `gnome-terminal`, `org.gnome.terminal`,
+   `org.gnome.ptyxis`, `ptyxis`, `org.gnome.console`, `kgx`,
+   `xfce4-terminal`, `lxterminal`, `foot`, `footclient`, `wezterm` và
+   `org.wezfurlong.wezterm`. Với terminal chưa nhận diện nhưng báo đúng
+   content purpose, nhánh raw passthrough vẫn được dùng.
+4. Chế độ tiếng Anh cũng luôn chuyển phím nguyên bản. Khi đổi cửa sổ hoặc
+   KWin reset input context, composition, surrounding text, hàng đợi phím và
+   trạng thái modifier được xóa để không dùng lại dữ liệu của cửa sổ trước.
 
-### 3. Trên Windows (Unikey-Wayland Windows Edition)
-1. Tải về file `UnikeyWayland-Windows-x64.zip` hoặc `UnikeyWayland-Windows-ARM64.zip` từ mục **[Releases](https://github.com/ubuntu2310fake/Unikey-Wayland/releases)**.
-2. Giải nén thư mục tải về.
-3. Nhấp đúp chuột vào file `setup.bat` (chương trình sẽ tự động yêu cầu nâng quyền Admin, cài đặt ứng dụng vào `C:\Program Files\UnikeyWayland`, tạo Shortcut ngoài Desktop/Start Menu và tự động kích hoạt bộ gõ).
-4. Bạn có thể mở Bảng điều khiển bằng cách nhấp đúp vào biểu tượng chữ **V/E** dưới khay hệ thống (System Tray).
+Gạch chân còn nhìn thấy trong terminal có thể đến từ zsh-syntax-highlighting,
+autocomplete, lựa chọn văn bản hoặc chính terminal; đó không phải preedit do
+Wayland client này gửi. Bộ gõ không thể tắt các lớp hiển thị đó thay cho shell
+và terminal.
 
----
+## Backend và phạm vi hỗ trợ
 
-## Tải Xuống (Downloads)
+| Backend | Môi trường | Cách tích hợp | Ghi chú |
+| --- | --- | --- | --- |
+| Wayland client | Linux Wayland, đặc biệt KDE Plasma/KWin | `zwp_input_method_v1` + Qt event loop | Compositor phải cung cấp protocol này và cho phép Virtual Keyboard. Không mặc định đảm bảo trên mọi compositor. |
+| IBus engine | GNOME Wayland hoặc X11 khi IBus được cài | `ibus-engine-unikey-wayland` | Chỉ được tạo khi CMake tìm thấy `ibus-1.0`. Cơ chế preedit của IBus khác Wayland client. |
+| Windows client | Windows x64/ARM64 khi có bộ Qt/toolchain tương ứng | Win32 `WH_KEYBOARD_LL` + `SendInput` | CI có job cho x64 và ARM64; artifact cụ thể phụ thuộc release. |
 
-Bạn có thể tải các gói cài đặt đóng gói sẵn cho từng hệ điều hành trực tiếp tại trang **[Releases](https://github.com/ubuntu2310fake/Unikey-Wayland/releases)** của dự án này:
+Thư mục `x11-client/` vẫn chứa một frontend X11 riêng lẻ, nhưng không được
+đưa vào target cài đặt của `wayland-client/CMakeLists.txt` và script
+`install.sh` cũng không build nó. Trên X11, đường cài đặt được hỗ trợ trong
+source tree là IBus.
 
-- **Windows Edition**: Tải file `.zip` (hỗ trợ cả x64 và ARM64/Copilot+ PCs)
-- **Fedora (RPM)**: Tải file `.rpm` (hỗ trợ cả x86_64 và aarch64/ARM64)
-- **Ubuntu / Debian (DEB)**: Tải file `.deb` (hỗ trợ cả x86_64 và arm64)
-- **Arch Linux (tar.zst)**: Tải file `.pkg.tar.zst` (hỗ trợ cả x86_64 và aarch64/ARM64)
+## Tính năng đang được nối vào backend Linux
 
----
+- Kiểu gõ **Telex**, **Telex giản lược (Telex 2)**, **VNI** và **VIQR**.
+- Gõ tự do (free marking), kiểu đặt dấu truyền thống `òa, úy` hoặc kiểu mới
+  `oà, uý`.
+- Kiểm tra chính tả và tự động khôi phục chuỗi phím gốc khi từ hoàn chỉnh
+  không hợp lệ. Việc khôi phục chỉ được xét ở bước commit; nó không phải bộ
+  sửa lỗi chính tả tự động.
+- Gõ tắt (macro) được hỗ trợ trong luồng Bamboo của ứng dụng không bị
+  raw-passthrough; bảng macro được lưu trong file cấu hình JSON. Terminal của
+  Wayland client không chạy Bamboo nên cũng không mở rộng macro.
+- Wrapper Bamboo có replay raw keys để giữ đúng trạng thái biến đổi (được
+  dùng bởi IBus và regression tests). Wayland client chuyển Backspace cho
+  client tự xử lý rồi xóa composition nội bộ; phần thay thế chữ vẫn tính diff
+  theo byte UTF-8 nhưng chỉ xóa từ đầu ký tự. Vì vậy các trường hợp như `thê`
+  → `thể` không bị cắt giữa một codepoint.
+- Hàng đợi phím chờ callback surrounding text của client, kiểm tra lại
+  snapshot trước khi sửa và có nhánh phục hồi giới hạn cho client áp dụng
+  delete/commit lệch transaction.
+- `Ctrl + Shift` (mặc định) hoặc `Alt + Z` để đổi E/V. `Ctrl + Shift + F5`
+  mở bảng điều khiển; biểu tượng StatusNotifier của KDE hiển thị V/E và tự
+  đăng ký lại khi tray hoặc Plasma khởi động lại.
+- Khi đổi E/V, KDE OSD được gọi qua `org.kde.plasmashell`/
+  `org.kde.osdService`.
 
-## Hướng Dẫn Cài Đặt
+### Những ô cấu hình không nên hiểu quá mức
 
-### 1. Fedora (Sử dụng Copr)
+- Chuỗi `charset` (Unicode, TCVN3, VNI Windows, VIQR) được lưu để giữ tương
+  thích giao diện, nhưng đường Wayland/IBus hiện tại commit UTF-8 và không có
+  bước chuyển đổi sang các bảng mã đó.
+- Danh sách `preedit_apps.txt` được giữ để tương thích IBus và cấu hình cũ.
+  Wayland client hiện tại không dùng danh sách này để bật preedit; danh sách
+  rỗng không làm terminal nhận tiếng Việt vì terminal đã đi qua raw
+  passthrough.
+- Ô `Bật hội thoại này khi khởi động` được lưu trong cấu hình Wayland nhưng
+  main loop Wayland hiện khởi động ẩn; mở giao diện bằng tray,
+  `Ctrl + Shift + F5`, `unikey-wayland --setup` hoặc `--exclude`. Windows
+  Edition mới dùng giá trị này để tự mở cửa sổ.
+- Một số ô giao diện được giữ lại cho tương thích nhưng chưa có đường xử lý
+  tương ứng trong backend hiện tại (ví dụ lựa chọn restore hotkey riêng và
+  nút mặc định của Wayland). Không nên coi chúng là tính năng đã được đảm
+  bảo chỉ vì chúng xuất hiện trên UI.
 
-```bash
-# Kích hoạt kho phần mềm Copr của tác giả
-sudo dnf copr enable -y truonghieu/Unikey-Wayland
+## IBus có khác Wayland client không?
 
-# Tiến hành cài đặt
-sudo dnf install -y unikey-wayland
-```
+IBus là target tùy chọn trong CMake. Khi được build và người dùng chọn engine
+`unikey-wayland` trong IBus:
 
-### 2. Ubuntu (Sử dụng PPA)
+- Chế độ bình thường dùng surrounding text và direct diffing.
+- IBus vẫn có nhánh preedit để tương thích ứng dụng cần nó. Nó đọc
+  `~/UnikeyWayland/preedit_apps.txt` khi file tồn tại; nếu file không tồn tại,
+  source IBus có danh sách mặc định cũ. Ngoài ra, `IBUS_INPUT_PURPOSE_TERMINAL`
+  vẫn ép nhánh preedit bất kể danh sách ứng dụng.
+- Vì vậy câu “không preedit” ở phần trên chỉ áp dụng cho **Wayland client**,
+  không được suy diễn thành cam kết giống hệt cho IBus.
 
-```bash
-# Thêm kho PPA của tác giả vào hệ thống
-sudo add-apt-repository -y ppa:trex219961/unikey-wayland-ppa
+`install.sh` tạo file `preedit_apps.txt` rỗng nếu file chưa có và không ghi đè
+file người dùng đã tạo. Điều này làm mặc định danh sách ứng dụng rỗng cho bản
+cài mới, nhưng không thay đổi nhánh terminal-purpose của IBus.
 
-# Cập nhật cơ sở dữ liệu gói và cài đặt
-sudo apt update
-sudo apt install -y unikey-wayland
-```
+## Cài đặt trên Linux
 
-### 3. Arch Linux (tar.zst)
+### Cách nhanh cho KDE Plasma Wayland
 
-```bash
-# Cài đặt package tar.zst tải về từ Releases
-sudo pacman -U ./unikey-wayland-1.0.0-1-x86_64.pkg.tar.zst
-```
+`install.sh` là script cài **Wayland client**, không phải bộ cài cho IBus hay
+Windows. Chạy từ thư mục gốc repository:
 
----
+~~~bash
+chmod +x install.sh
+./install.sh
+~~~
 
-## Cách Tự Build Từ Mã Nguồn
+Script kiểm tra Go, GCC/G++, `pkg-config`, `wayland-scanner` và Qt 6 `moc`,
+sau đó:
 
-Yêu cầu hệ thống cần cài đặt sẵn **Qt 6 (Widgets, Gui, Core)**, **Wayland Client**, **Wayland Scanner** và các công cụ build cơ bản (`gcc`, `g++`, `cmake`, `make`).
+1. build `libbamboo.a` từ mã Go vendored;
+2. sinh mã protocol Wayland và Qt MOC;
+3. cài binary vào `~/.local/bin/unikey-wayland`, desktop entry và SVG icon vào
+   `~/.local/share`;
+4. tạo `~/UnikeyWayland/preedit_apps.txt` rỗng nếu chưa tồn tại;
+5. nếu có `kwriteconfig6`, ghi desktop entry vào các khóa KWin Virtual
+   Keyboard và yêu cầu KWin reconfigure;
+6. dừng process `unikey-wayland` cũ, yêu cầu KWin reconfigure và bật lại
+   Virtual Keyboard; việc KWin tạo process mới vẫn phụ thuộc session hiện tại.
 
-```bash
-# Tạo thư mục build
-cmake -B build wayland-client
+Script không thể tự chứng minh compositor đã chấp nhận input method. Sau khi
+chạy, trên KDE hãy vào **System Settings → Keyboard → Virtual Keyboard** và
+chọn desktop entry `Unikey-Wayland` nếu KWin chưa chọn sẵn. Bộ gõ sẽ chạy nền;
+mở bảng điều khiển bằng biểu tượng V/E hoặc `Ctrl + Shift + F5`.
 
-# Biên dịch ứng dụng
-cmake --build build
-```
+### Build và cài bằng CMake
 
-## Bản Quyền
-Mã nguồn phát triển dựa trên UniKey Engine (bản quyền GPL). Vui lòng xem tệp [LICENSE](LICENSE) để biết thêm chi tiết.
+Yêu cầu tối thiểu của target Wayland:
 
-## 🤣 Fun fact
+- CMake 3.16 trở lên và compiler C/C++ hỗ trợ C++17;
+- Go theo `wayland-client/src/go.mod` (hiện khai báo Go 1.22.0);
+- `pkg-config`, `wayland-client`, `wayland-scanner`;
+- Qt 6 Core, Gui, Widgets và DBus;
+- XML input-method protocol đã được vendored trong repository; gói
+  `wayland-protocols` là tùy chọn theo distro.
 
-GitHub hiện xác định ngôn ngữ chính của Unikey-Wayland là **Makefile (61,6%)**.
+IBus là tùy chọn; cài thêm development package của IBus nếu muốn CMake tạo
+`ibus-engine-unikey-wayland`.
 
-Nói cách khác, theo GitHub thì đây là một **bộ gõ tiếng Việt Native Wayland được viết bằng... Makefile**.
+Ví dụ tên gói phổ biến (tên có thể khác theo distro):
 
-Không, tôi chưa implement bộ gõ Telex bằng GNU Make đâu 🤣
+~~~bash
+# Debian/Ubuntu
+sudo apt install cmake build-essential pkg-config golang-go \
+  qt6-base-dev qt6-wayland libwayland-dev libwayland-bin wayland-protocols
+# Tùy chọn IBus
+sudo apt install libibus-1.0-dev
 
-Phần xử lý thực tế vẫn là C/C++, Wayland protocol và Bamboo Engine viết bằng Go. Chỉ là đống Makefile trong repository đã giành quyền kiểm soát biểu đồ ngôn ngữ.
+# Fedora
+sudo dnf install cmake gcc-c++ pkgconfig golang \
+  qt6-qtbase-devel wayland-devel wayland-protocols-devel
+# Tùy chọn IBus
+sudo dnf install ibus-devel
 
----
+# Arch Linux
+sudo pacman -S cmake gcc pkgconf go qt6-base wayland wayland-protocols
+# Tùy chọn IBus
+sudo pacman -S ibus
+~~~
 
-## Câu hỏi thường gặp (FAQ)
+Build và chạy test:
 
-### 1. Tại sao tên dự án vẫn là Unikey-Wayland trên mọi nền tảng?
-Dự án sinh ra trên Linux Wayland, sau đó kiến trúc được mở rộng dần để hỗ trợ các môi trường khác (IBus, Windows). Một cái tên chung chung có thể làm mất dấu nguồn gốc của dự án, vì vậy, tên Unikey-Wayland được giữ nguyên trên mọi nền tảng.
+~~~bash
+cmake -S wayland-client -B build \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 
-### 2. Unikey-Wayland (Windows Edition) có phải là phiên bản chính của dự án không?
-Không. Unikey-Wayland là tên dự án. Windows Edition chỉ là một phiên bản của dự án dành riêng cho Windows, tương tự như GNOME/IBus Edition hay bản gốc KDE Plasma Wayland. Việc một Edition có nhiều người dùng hơn không làm thay đổi cội nguồn dự án.
+# Regression test trực tiếp cho wrapper Bamboo
+(cd wayland-client/src && go test -race -mod=vendor bamboo_wrapper.go bamboo_wrapper_test.go)
+~~~
 
-### 3. Unikey-Wayland có phải là UniKey chính thức không?
-Không. Đây là một dự án mã nguồn mở độc lập và không phải phiên bản chính thức của UniKey. Tên dự án không có nghĩa phần mềm được chứng thực bởi tác giả UniKey gốc.
+Cài target CMake (mặc định vào prefix của CMake, thường là `/usr/local`):
 
-### 4. Tại sao tên là “Unikey” nhưng lại dùng lõi Bamboo?
-Unikey-Wayland sử dụng lõi xử lý tiếng Việt (Engine) được dịch lại bằng C++ từ mã nguồn mở Bamboo. Kiến trúc modular cho phép phần xử lý phím (Frontend) và phần biến đổi chữ (Backend) tách biệt hoàn toàn nhau. Vui lòng xem phần Giấy phép để biết chi tiết.
+~~~bash
+sudo cmake --install build
+~~~
 
-### 5. Tại sao bản KDE chỉ có tên Unikey-Wayland mà các bản khác lại có chữ “Edition”?
-KDE Plasma Wayland là môi trường ban đầu mà dự án hướng tới. Các môi trường sau sử dụng chữ Edition để xác định backend chuyên biệt: GNOME (IBus) Edition, Windows Edition, v.v.
+Muốn cài không cần quyền root, chọn prefix khi configure, ví dụ
+`-DCMAKE_INSTALL_PREFIX="$HOME/.local"`. CMake chỉ cài các target và asset
+được build; nó không tự chọn Virtual Keyboard trong KWin.
 
-### 6. Unikey-Wayland có thực sự đa nền tảng không?
-Có, nhưng theo triết lý "Native Backend". Unikey-Wayland sử dụng các module bắt phím **riêng biệt cho từng môi trường** thay vì dùng một framework giả lập. KDE dùng Wayland Protocol, GNOME dùng IBus, còn Windows dùng Global Hook.
+### Gỡ lỗi Wayland
 
-### 7. Tại sao không dùng một backend duy nhất cho tất cả nền tảng?
-Hệ thống nhập liệu hoàn toàn khác biệt giữa Wayland, IBus và Windows. Cố ép tất cả sử dụng chung một cơ chế (ví dụ: Qt Input Method) thường dẫn đến độ trễ, nháy chữ hoặc lặp ký tự.
+Nếu compositor không cung cấp `zwp_input_method_v1`, binary in thông báo
+“Running in GUI-only mode” và chỉ còn giao diện cấu hình. Kiểm tra nhanh:
 
-### 8. Tại sao Unikey-Wayland không thích Preedit Mode (Gạch chân chữ)?
-Đối với tiếng Việt (Telex/VNI), chúng tôi ưu tiên trải nghiệm "thay thế trực tiếp" để mang lại cảm giác gõ tự nhiên.
-- **Trên Linux:** Preedit Mode vẫn được sử dụng như một cơ chế dự phòng an toàn cho các Terminal (thông qua D-Bus).
-- **Trên Windows:** Preedit Mode đã bị **loại bỏ hoàn toàn** nhờ thuật toán lách lỗi Omnibox đặc trị (tiêm lại phím vật lý để xóa vùng chọn).
+~~~bash
+echo "$XDG_SESSION_TYPE"
+echo "$WAYLAND_DISPLAY"
+pgrep -af unikey-wayland
+~~~
 
-### 9. Unikey-Wayland có dùng TSF (Text Services Framework) trên Windows không?
-**Tuyệt đối Không.** Windows Edition hoàn toàn không sử dụng TSF. TSF từng được chúng tôi thử nghiệm nhưng gây ra lỗi lặp chữ trên Chromium. Để đạt tốc độ tuyệt đối, chúng tôi sử dụng kiến trúc bắt phím mức thấp (Global Keyboard Hook) kết hợp API SendInput.
+Bật log phím/protocol có chủ đích bằng:
 
-### 10. Tại sao đôi khi bộ gõ bị lặp chữ?
-Lặp chữ xảy ra khi trạng thái bộ gõ và tốc độ render của ứng dụng bị mất đồng bộ. Đây là một lỗi nghiêm trọng. Nếu gặp lỗi này, hãy báo cáo Issue và ghi rõ nền tảng, tên ứng dụng và cách tái hiện.
+~~~bash
+UNIKEY_WAYLAND_DEBUG=1 unikey-wayland
+~~~
 
-### 11. Tại sao không thêm sleep(20ms) để sửa lỗi lặp chữ?
-Dùng độ trễ (Delay) chỉ là cách che đậy lỗi (Race condition) trên máy tính này và sẽ sinh ra lỗi trên máy tính khác. Unikey-Wayland kiên quyết tìm ra cơ chế xử lý sự kiện chuẩn xác nhất thay vì dựa vào thời gian chờ.
+Wayland client ghi log debug chính vào `/tmp/uk_debug.log`; WindowTracker còn
+ghi sự kiện cửa sổ vào `/tmp/tracker.log`. Các log này có thể chứa tên ứng
+dụng/cửa sổ, nên chỉ gửi khi đã xem lại nội dung.
 
-### 12. Tại sao Terminal luôn là chỗ bộ gõ dễ gặp vấn đề?
-Terminal có mô hình nhập liệu khác hẳn trình soạn thảo văn bản. Không thể kỳ vọng Terminal cung cấp các khả năng thay thế chữ giống như MS Word. Do đó, trên Linux, Terminal luôn bị ép vào Preedit Mode để bảo đảm an toàn.
+## Windows Edition
 
-### 13. Có thể cài Unikey-Wayland và UniKey gốc cùng lúc không?
-Bạn có thể cài đặt, nhưng **tuyệt đối không bật đồng thời hai bộ gõ**. Hai phần mềm cùng tranh nhau bắt một phím sẽ gây ra lỗi văn bản không lường trước.
+Windows Edition nằm ở `windows-client/` và build bằng Qt 6 + MSVC. Runtime
+dùng Win32 low-level keyboard hook và `SendInput`; `bamboo.dll` phải nằm cạnh
+file thực thi. Bundle CI chứa `UnikeyWayland.exe`, `bamboo.dll`, Qt runtime,
+`setup.bat`, `7z.exe` và `7z.dll`.
 
-### 14. Windows Defender báo bộ gõ đang theo dõi bàn phím. Có phải keylogger không?
-Bộ gõ nào cũng cần theo dõi phím (Global Hook) để biến T, E, L, E, X thành chữ Việt. Unikey-Wayland là mã nguồn mở 100%, xử lý ký tự hoàn toàn cục bộ (offline) và không bao giờ gửi bất kỳ dữ liệu nào lên Internet.
+`setup.bat` yêu cầu quyền Administrator, giải nén vào
+`C:\Program Files\UnikeyWayland`, tạo shortcut Desktop/Start Menu rồi khởi
+động chương trình. Nó **không tự bật khởi động cùng Windows**; tùy chọn đó
+được ghi vào `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` khi
+người dùng bật trong giao diện. Ô “Bật hội thoại này khi khởi động” được
+Windows client đọc lúc process bắt đầu.
 
-### 15. Unikey-Wayland có chạy trên Windows không?
-Có. Hãy tải file `UnikeyWayland.exe` trong mục Release. Nó chạy hoàn toàn độc lập như mọi phần mềm Windows, không cần WSL, không cần cài Linux hay Wayland.
+Source Windows hiện vẫn hiển thị các combo kiểu gõ/bảng mã và lưu chúng vào
+JSON, nhưng `applySettings()` của Windows client chưa truyền các giá trị đó
+vào `bamboo.dll`. Không nên quảng bá rằng đổi các combo này đã thay đổi engine
+Windows trong bản source này.
 
-👉 **Đọc thêm toàn bộ các câu hỏi thú vị khác tại [FAQ.md](FAQ.md)**
+Windows client tự kiểm tra GitHub Releases sau khoảng ba giây và có nút kiểm
+tra thủ công. Việc xử lý phím vẫn cục bộ, nhưng vì có luồng kiểm tra/tải OTA
+này nên không được mô tả là “100% offline”.
+
+## Cấu hình và quyền riêng tư
+
+### Linux
+
+- `~/UnikeyWayland/global.json`: kiểu gõ, các cờ Bamboo, macro, E/V và tùy
+  chọn giao diện.
+- `~/UnikeyWayland/preedit_apps.txt`: danh sách legacy cho IBus; để trống nếu
+  không muốn chọn ứng dụng theo tên. Wayland client không dùng nó để bật
+  preedit.
+
+### Windows
+
+- `QStandardPaths::AppDataLocation/Unikey/global.json` (thường nằm trong
+  `%LOCALAPPDATA%`): cài đặt giao diện, macro và E/V.
+- Registry `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`: chỉ
+  được dùng khi bật “Khởi động cùng Windows”.
+
+Linux engine không có code gửi nội dung phím lên mạng. Windows dùng mạng cho
+GitHub Releases như mô tả ở trên; nó không gửi văn bản đang gõ trong luồng cập
+nhật đó.
+
+## Đóng gói và kiến trúc
+
+- `package_arch.sh` tạo gói Arch `.pkg.tar.zst` từ binary đã build và có nhánh
+  nhận diện `x86_64`/`aarch64`.
+- `debian/` và spec RPM phục vụ pipeline Linux.
+- Workflow GitHub Actions hiện có job Linux x86_64/aarch64 và Windows x64/
+  ARM64, nhưng việc một release cụ thể có đủ artifact hay không phụ thuộc
+  lần chạy pipeline đó.
+- `PKGBUILD` trong repository hiện khai báo `x86_64`; đừng suy ra từ script
+  đóng gói rằng mọi distro/kiến trúc đều đã có gói nhị phân được kiểm thử.
+
+## Kiểm thử
+
+CTest hiện đăng ký:
+
+- `text-transaction-test`: diff UTF-8, selection/autocomplete, transaction
+  delete/commit và Backspace forwarded;
+- `bamboo-wrapper-test`: các kiểu Telex/VNI/VIQR/Telex 2, spell-check,
+  auto-restore và replay Backspace.
+
+Các test trên không thay thế kiểm thử trong compositor thật. Khi báo lỗi, hãy
+ghi rõ session (KDE/GNOME, Wayland/X11), compositor, ứng dụng, kiểu gõ, chuỗi
+phím và nội dung log tối thiểu để có thể tái hiện.
+
+## FAQ ngắn
+
+### Vì sao terminal không gõ được VNI/Telex?
+
+Đó là hành vi có chủ đích của Wayland client hiện tại: terminal nhận raw key
+để giữ autocomplete, phím lặp và Backspace nguyên vẹn. Muốn thử cơ chế IBus,
+phải build IBus target và chọn engine IBus; IBus có semantics preedit riêng và
+không được xem là cùng backend.
+
+### Vì sao vẫn thấy gạch chân?
+
+Wayland client không gửi preedit. Hãy phân biệt gạch chân của zsh
+syntax-highlighting, autocomplete, spellchecker, selection hoặc terminal với
+gạch chân preedit. Kiểm tra thêm `UNIKEY_WAYLAND_DEBUG` và app đang focus.
+
+### Có phải đây là UniKey chính thức không?
+
+Không. Đây là dự án độc lập, không phải bản phát hành chính thức của UniKey.
+Tên dự án được giữ theo nguồn gốc Wayland; lõi hiện tại là Bamboo Engine.
+
+### Có thể bật cùng lúc hai bộ gõ không?
+
+Không nên. Chỉ bật một input method tại một thời điểm để tránh hai backend cùng
+nhận một phím.
+
+## Bản quyền
+
+Mã nguồn project ở root phát hành theo GNU GPL v3, xem [LICENSE](LICENSE).
+Bamboo Engine được vendored tại `wayland-client/src/vendor` và có giấy phép
+riêng trong [LICENSE của Bamboo](wayland-client/src/vendor/github.com/BambooEngine/bamboo-core/LICENSE).
+Các thành phần bên thứ ba khác vẫn tuân theo license/header tương ứng.
+
+## Liên kết
+
+- [Changelog](CHANGELOG.md)
+- [FAQ đầy đủ](FAQ.md)
+- [Issues của dự án upstream](https://github.com/ubuntu2310fake/Unikey-Wayland/issues)
+- [Releases upstream](https://github.com/ubuntu2310fake/Unikey-Wayland/releases)

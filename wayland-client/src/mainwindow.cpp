@@ -119,7 +119,7 @@ MainWindow::MainWindow(bool* p_viet_mode, bool is_gnome, QWidget *parent)
     // --- Tab Danh sách loại trừ ---
     QWidget* tabExclude = new QWidget();
     QVBoxLayout* excludeLayout = new QVBoxLayout(tabExclude);
-    QLabel* excludeLabel = new QLabel("Các ứng dụng tự động dùng gạch chân (Preedit):\n(Một dòng cho mỗi ứng dụng, ví dụ: kitty, studio, java)");
+    QLabel* excludeLabel = new QLabel("Preedit đã tắt; danh sách cũ chỉ được giữ để tương thích:\n(Một dòng cho mỗi ứng dụng, ví dụ: kitty, studio, java)");
     m_preeditAppsTextEdit = new QPlainTextEdit(this);
     excludeLayout->addWidget(excludeLabel);
     excludeLayout->addWidget(m_preeditAppsTextEdit);
@@ -289,7 +289,7 @@ void MainWindow::loadConfig() {
         preeditFile.close();
     } else {
         // Default list
-        QString defaults = "kitty\nalacritty\nkonsole\ngnome-terminal\nxfce4-terminal\nlxterminal\nandroid-studio\njava";
+        QString defaults;
         m_preeditAppsTextEdit->setPlainText(defaults);
         QDir().mkpath(QFileInfo(preeditPath).absolutePath());
         if (preeditFile.open(QIODevice::WriteOnly | QIODevice::Text)) {

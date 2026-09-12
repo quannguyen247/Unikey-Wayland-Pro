@@ -32,28 +32,6 @@ void WindowTracker::loadExcludedApps() {
         QDir().mkpath(QFileInfo(configPath).absolutePath());
         if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&file);
-            out << "google docs\n";
-            out << "google tài liệu\n";
-            out << "docs.google.com\n";
-            out << "google sheets\n";
-            out << "google trang tính\n";
-            out << "sheets.google.com\n";
-            out << "google slides\n";
-            out << "google trình bày\n";
-            out << "google trang trình bày\n";
-            out << "slides.google.com\n";
-            out << "google forms\n";
-            out << "google biểu mẫu\n";
-            out << "forms.google.com\n";
-            out << "discord\n";
-            out << "kitty\n";
-            out << "alacritty\n";
-            out << "konsole\n";
-            out << "gnome-terminal\n";
-            out << "xfce4-terminal\n";
-            out << "lxterminal\n";
-            out << "android-studio\n";
-            out << "java\n";
             file.close();
         }
     }

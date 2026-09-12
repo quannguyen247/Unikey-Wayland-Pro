@@ -14,7 +14,7 @@ Không. Unikey-Wayland là tên dự án. Unikey-Wayland (Windows Edition) là p
 Không. Unikey-Wayland bắt nguồn từ Linux Wayland và ban đầu tập trung vào KDE Plasma. Hỗ trợ Windows được bổ sung sau.
 
 **Unikey-Wayland có phải là UniKey chính thức không?**
-Không. Đây là một dự án mã nguồn mở độc lập. Dự án sử dụng Engine C++ có nguồn gốc từ mã nguồn mở Bamboo. Tên dự án không có nghĩa phần mềm được phát triển hoặc chứng thực bởi tác giả UniKey chính thức.
+Không. Đây là một dự án mã nguồn mở độc lập. Phần xử lý tiếng Việt hiện dùng Bamboo Engine được vendored trong source tree. Tên dự án không có nghĩa phần mềm được phát triển hoặc chứng thực bởi tác giả UniKey chính thức.
 
 **Tại sao bản KDE chỉ có tên Unikey-Wayland mà các bản khác lại có chữ “Edition”?**
 KDE Plasma Wayland là môi trường ban đầu. Các môi trường sau sử dụng chữ Edition để xác định backend (ví dụ: Windows Edition, GNOME Edition).
@@ -47,13 +47,13 @@ Mục tiêu ban đầu là giải quyết bài toán tích hợp Input Method tr
 - **Preedit Mode:** Chữ đang gõ sẽ nằm trong một trạng thái chờ (thường có gạch chân) trước khi được xác nhận.
 
 **Tại sao Unikey-Wayland không thích Preedit Mode?**
-Đối với tiếng Việt (Telex/VNI), việc gạch chân liên tục khi bỏ dấu gây rối mắt. Dự án ưu tiên thay thế trực tiếp. Tuy nhiên, trên Linux, Preedit Mode vẫn được giữ lại làm phao cứu sinh cho các Terminal. Trên Windows, nó đã bị xóa sổ hoàn toàn bằng thuật toán lách lỗi Omnibox.
+Đối với tiếng Việt (Telex/VNI), việc gạch chân liên tục khi bỏ dấu gây rối mắt. Wayland client hiện tại dùng direct commit cho ứng dụng văn bản và không gửi sự kiện preedit. Riêng terminal của Wayland client được raw passthrough hoàn toàn nên không gõ tiếng Việt trong đó. IBus là backend khác và vẫn có nhánh preedit riêng.
 
 **Tại sao Terminal luôn là chỗ bộ gõ dễ gặp vấn đề?**
-Terminal có cơ chế buffer và input cực kỳ khác biệt so với các trình soạn thảo văn bản (Word, Chrome). Việc áp dụng Native Mode cho Terminal không bao giờ ổn định 100%.
+Terminal có cơ chế buffer, autocomplete và key repeat khác trình soạn thảo văn bản. Để giữ phím gốc và Backspace nguyên vẹn, Wayland client hiện tại không đưa terminal vào luồng Bamboo; đây là quyết định tương thích, không phải chế độ preedit.
 
-**Tại sao không cho người dùng tự chịu trách nhiệm và xóa blacklist Terminal?**
-Vì một lỗi input method không chỉ ảnh hưởng đến giao diện bộ gõ, mà còn phá hỏng văn bản. Đối với các lỗi đã biết, chúng tôi tước quyền vô hiệu hóa Preedit để đảm bảo an toàn.
+**Tại sao danh sách loại trừ vẫn còn nếu Wayland không dùng nó?**
+`preedit_apps.txt` được giữ để tương thích cấu hình cũ và backend IBus. Wayland client không dùng danh sách này để bật preedit; terminal vẫn raw passthrough theo app ID hoặc `content_purpose`.
 
 **Unikey-Wayland có dùng TSF trên Windows không?**
 Tuyệt đối KHÔNG. TSF từng được nghiên cứu nhưng nó gây lỗi nháy chữ trên Chromium. Bản Windows hiện tại sử dụng Global Keyboard Hook kết hợp SendInput.
@@ -62,16 +62,16 @@ Tuyệt đối KHÔNG. TSF từng được nghiên cứu nhưng nó gây lỗi n
 Do mất đồng bộ giữa bộ gõ và ứng dụng. Đây là lỗi nghiêm trọng, hãy báo cáo chi tiết cho chúng tôi (nêu rõ môi trường, tên ứng dụng, chuỗi phím đã bấm).
 
 **Tại sao gõ chậm thì đúng nhưng gõ nhanh lại lỗi?**
-Đây là dấu hiệu của hiện tượng Race Condition. Bộ gõ không được coi là ổn định nếu chỉ đúng khi gõ chậm. Unikey-Wayland luôn tự động test với tốc độ mô phỏng siêu cao.
+Đây thường là dấu hiệu mất đồng bộ giữa input method và ứng dụng. Regression tests trong repository kiểm tra các transaction UTF-8, surrounding text và wrapper Bamboo, nhưng không thay thế kiểm thử trong compositor thật. Khi báo lỗi, hãy ghi rõ session, compositor, ứng dụng và chuỗi phím.
 
 **Tại sao Facebook, TikTok, Discord hoặc Terminal dễ làm lộ lỗi bộ gõ?**
 Vì các web app (Electron) và Terminal sử dụng framework render chữ hoàn toàn khác biệt với các ứng dụng Native thông thường.
 
 **Tại sao không thêm sleep(20ms) để hết lặp chữ?**
-Delay chỉ che giấu lỗi chứ không giải quyết tận gốc, đồng thời sinh ra lỗi trên các máy có tốc độ khác nhau. 🤣 (Cái này là code smell đấy!)
+Wayland client không sleep cố định sau mỗi phím. Nó dùng callback surrounding text, hàng đợi sự kiện và hai timer có giới hạn: 12 ms để thử sửa transaction mà client áp dụng sai thứ tự, 750 ms để bỏ pending edit nếu client không phản hồi. Đây là cơ chế phối hợp sự kiện, không phải thêm delay vào mọi phím.
 
-**Tại sao Gõ tắt hoạt động ở Normal Mode nhưng lại bị tắt trong Preedit Mode (Terminal Mode)?**
-Việc chèn một chuỗi văn bản dài vào giữa Preedit String dễ gây lỗi thay thế văn bản. Một tính năng tạo chữ sai nguy hiểm hơn một tính năng bị khóa. Do đó, trên phiên bản IBus (GNOME/X11), tính năng Gõ tắt bị vô hiệu hóa khi ở chế độ Preedit để bảo đảm an toàn. Tuy nhiên, trên bản Native gốc (KDE Plasma Wayland), tính năng Gõ tắt trong Preedit Mode vẫn được bật bình thường do cơ chế xử lý sự kiện của KWin hỗ trợ thay thế chuỗi an toàn hơn.
+**Tại sao Gõ tắt hoạt động ở ứng dụng thường nhưng không hoạt động trong terminal?**
+Wayland client chuyển toàn bộ phím terminal sang raw passthrough nên Bamboo và macro không được gọi ở đó. IBus có semantics khác: macro được xét trong nhánh direct diffing, còn nhánh preedit hiện không mở rộng macro.
 
 **Có thể dùng Unikey-Wayland cùng EVKey/OpenKey không?**
 KHÔNG. Không nên bật 2 bộ gõ cùng lúc để tranh nhau bắt phím của bạn.
@@ -79,7 +79,7 @@ KHÔNG. Không nên bật 2 bộ gõ cùng lúc để tranh nhau bắt phím c�
 ## Linux & Tương thích
 
 **Unikey-Wayland có hỗ trợ GNOME / X11 không?**
-Có, thông qua bản IBus Engine tương thích.
+Có thể dùng IBus engine nếu CMake tìm thấy development package `ibus-1.0` và IBus được cấu hình. Đây không phải cùng backend với Wayland client; khả năng tương thích phụ thuộc ứng dụng và compositor.
 
 **Tôi đang dùng KDE X11, nên dùng bản nào?**
 Hãy dùng bản qua IBus. Bản gốc (Wayland Client) chỉ dành riêng cho KDE Plasma Wayland.
@@ -94,7 +94,7 @@ Không. Mỗi Compositor triển khai Wayland Protocol một kiểu khác nhau.
 Vì GNOME và KDE xài kiến trúc nhúng Input Method hoàn toàn khác nhau. IBus (GNOME) không có cùng Semantics với KWin (KDE).
 
 **Tại sao Windows Edition vẫn có giao diện Qt?**
-Để duy trì codebase chung của màn hình cấu hình. Qt không đồng nghĩa với Linux-only. Giao diện Qt không làm bộ gõ chậm đi, vì lõi xử lý phím đã tách biệt hoàn toàn.
+Qt được dùng cho cửa sổ cấu hình và tray. Đường bắt/chèn phím của target Windows nằm trong low-level hook và `SendInput`; ảnh hưởng hiệu năng thực tế vẫn phải đo thay vì suy ra chỉ từ framework giao diện.
 
 **Tôi có thể chạy X11 Edition trong WSL rồi gõ vào Microsoft Word không?**
 Không. 🤣
@@ -102,7 +102,7 @@ Không. 🤣
 ## Hệ điều hành & Đồ họa (Tấu hài 🤣)
 
 **Unikey-Wayland có chạy trên Windows không?**
-Có. Tải file UnikeyWayland.exe. Không cần cài WSL hay Wayland.
+Có target Windows riêng, không cần WSL hay Wayland. Nếu release có bundle `UnikeyWayland-Windows-x64.zip` hoặc `UnikeyWayland-Windows-ARM64.zip`, hãy giải nén và chạy `setup.bat`; file EXE cần `bamboo.dll` và Qt runtime đi kèm.
 
 **Wayland có phải tên tác giả không?**
 Không.
@@ -111,7 +111,7 @@ Không.
 Không, Wayland là một Display Server trên Linux.
 
 **Unikey-Wayland có gửi nội dung tôi gõ lên Internet không?**
-Tuyệt đối không. Bộ gõ hoạt động 100% cục bộ offline. Nếu Windows Defender báo có Keylogger, đó là do hành vi bắt phím (Global Hook) bị nhận diện nhầm, mã nguồn chúng tôi mở hoàn toàn.
+Luồng chuyển đổi ký tự không gửi nội dung phím lên mạng. Tuy nhiên Windows client có kiểm tra GitHub Releases sau khi khởi động và có thể tải bản cập nhật khi người dùng đồng ý; vì vậy không nên gọi toàn bộ ứng dụng là “100% offline”. Cảnh báo Windows Defender liên quan đến low-level keyboard hook là hành vi kỹ thuật cần cho backend Windows.
 
 **Unikey-Wayland có dùng GPU không? RTX 5090 có giúp tôi gõ tiếng Việt nhanh hơn không?**
 Không. Bạn không cần GPU acceleration để gõ được chữ "đ".
