@@ -298,6 +298,8 @@ static void arm_failed_edit_repair(WaylandState* state) {
         }
         repair_failed_edit(state, failure.text,
                            failure.cursor, failure.anchor);
+        // Timer callbacks run outside the Wayland read notifier.
+        wl_display_flush(state->display);
     });
 }
 
@@ -524,6 +526,8 @@ static void drain_queued_keys(WaylandState* state) {
     state->queued_keys.pop_front();
     process_keyboard_key(state, event.serial, event.time, event.key,
                          event.state, event.modifiers);
+    // Deliver queued input even when no new Wayland event arrives.
+    wl_display_flush(state->display);
     state->draining_keys = false;
     schedule_queued_keys(state);
 }

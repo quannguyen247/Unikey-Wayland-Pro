@@ -95,6 +95,17 @@ install(FILES ../io.github.ubuntu2310fake.UnikeyWayland.svg DESTINATION share/ic
 
 include(CTest)
 if (BUILD_TESTING)
+    set(DEFERRED_INPUT_SOURCES ${UK_SOURCES})
+    list(REMOVE_ITEM DEFERRED_INPUT_SOURCES src/main.cpp)
+    add_executable(deferred-input-test tests/deferred_input_test.cpp
+        ${DEFERRED_INPUT_SOURCES} ${PROTOCOL_C} ${PROTOCOL_H})
+    add_dependencies(deferred-input-test bamboo_target)
+    target_include_directories(deferred-input-test PRIVATE src ${CMAKE_CURRENT_BINARY_DIR} include)
+    target_compile_definitions(deferred-input-test PRIVATE _LINUX_)
+    target_link_libraries(deferred-input-test PRIVATE PkgConfig::WAYLAND_CLIENT
+        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::DBus ${BAMBOO_LIB})
+    add_test(NAME deferred-input-test COMMAND deferred-input-test)
+
     add_executable(text-transaction-test tests/text_transaction_test.cpp)
     target_include_directories(text-transaction-test PRIVATE src)
     add_test(NAME text-transaction-test COMMAND text-transaction-test)
