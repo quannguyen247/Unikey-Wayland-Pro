@@ -76,6 +76,7 @@ struct WaylandState {
     uint32_t surrounding_cursor = 0;
     uint32_t surrounding_anchor = 0;
     bool has_surrounding_text = false;
+    SurroundingSnapshot composition_start;
     PendingEdit pending_edit;
     std::deque<QueuedKeyEvent> queued_keys;
     std::deque<std::string> recent_tails;
@@ -146,6 +147,7 @@ static void reset_composition(WaylandState* state, bool clear_client_preedit = f
     Bamboo_Reset();
     if (state) {
         state->composed_word.clear();
+        state->composition_start = {};
     }
 }
 
@@ -203,6 +205,15 @@ static void replace_native_composition(WaylandState* state,
     if (old_tail_bytes == 0 && suffix.empty()) {
         state->composed_word = new_composition;
         return;
+    }
+
+    if (old_composition.empty() && !new_composition.empty() &&
+        state->has_surrounding_text &&
+        state->surrounding_cursor == state->surrounding_anchor &&
+        state->surrounding_cursor <= state->surrounding_text.size()) {
+        state->composition_start = {state->surrounding_text,
+                                    state->surrounding_cursor,
+                                    state->surrounding_anchor, true};
     }
 
     SurroundingReplacement replacement;
@@ -593,6 +604,13 @@ static void input_method_context_surrounding_text(void* data, struct zwp_input_m
             // transactions. Ignore the intermediate or an older callback.
             return;
         }
+    } else if (!state->composed_word.empty() &&
+               state->composition_start.valid &&
+               cursor == anchor &&
+               state->composition_start.text == reported_text) {
+        // This text has not acknowledged the append, even if an older
+        // cursor update moves it. Keep the prediction until fresh text/reset.
+        return;
     } else if (!state->recent_tails.empty()) {
         for (size_t i = state->recent_tails.size(); i-- > 0;) {
             if (!surrounding_prefix_ends_with(
@@ -612,6 +630,7 @@ static void input_method_context_surrounding_text(void* data, struct zwp_input_m
     state->surrounding_cursor = cursor;
     state->surrounding_anchor = anchor;
     state->has_surrounding_text = true;
+    state->composition_start = {};
     clear_pending_edit(state);
     drain_queued_keys(state);
 }

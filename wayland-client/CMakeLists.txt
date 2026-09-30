@@ -108,6 +108,8 @@ if (BUILD_TESTING)
 
     add_executable(text-transaction-test tests/text_transaction_test.cpp)
     target_include_directories(text-transaction-test PRIVATE src)
+    # These regression checks use assert(), including in Release builds.
+    target_compile_options(text-transaction-test PRIVATE -UNDEBUG)
     add_test(NAME text-transaction-test COMMAND text-transaction-test)
     add_test(
         NAME bamboo-wrapper-test
