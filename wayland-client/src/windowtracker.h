@@ -26,7 +26,10 @@ public slots:
     void activeWindowChanged(const QString& windowClass);
 
 private:
+    void loadKWinScript(int attempt);
+
     std::string m_activeWindowClass;
+    QString m_scriptPath;
     std::vector<std::string> m_excludedApps;
 };
 

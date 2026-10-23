@@ -23,6 +23,15 @@ CGO; Windows nạp `bamboo.dll` lúc chạy.
    text rồi commit trực tiếp. Nó **không gửi** các sự kiện
    `preedit_string`, `preedit_styling` hoặc `preedit_cursor`, vì vậy chữ đang
    gõ không bị gạch chân bởi bộ gõ.
+   Riêng ứng dụng nhân Chromium (Chrome, Chromium, Brave, Edge, Vivaldi, Opera,
+   web app cài từ chúng và app Electron như Claude, ChatGPT, VS Code, Discord),
+   phím không đổi chữ được gửi nguyên cho ứng dụng, còn khi thêm dấu bộ gõ gửi
+   phím Backspace thật rồi commit phần chữ mới. Như vậy trang web nhận
+   `keydown` như khi gõ phím thường; các trang chỉ nhận chữ đi kèm `keydown`
+   (ví dụ 10FastFingers) và terminal tích hợp của VS Code vẫn gõ đúng. App
+   Electron được nhận diện qua gói tài nguyên Chromium mà tiến trình của cửa sổ
+   đang mở. Ô địa chỉ (`content_purpose == url`) và khi đang có vùng chọn vẫn
+   dùng direct commit.
 2. Khi cửa sổ hiện tại là terminal, hoặc ứng dụng báo
    `content_purpose == terminal` (giá trị 12), Wayland client chuyển sang
    **raw passthrough**: cả phím nhấn, phím nhả và phím lặp được trả thẳng cho
@@ -222,9 +231,10 @@ Bật log phím/protocol có chủ đích bằng:
 UNIKEY_WAYLAND_DEBUG=1 unikey-wayland
 ~~~
 
-Wayland client ghi log debug chính vào `/tmp/uk_debug.log`; WindowTracker còn
-ghi sự kiện cửa sổ vào `/tmp/tracker.log`. Các log này có thể chứa tên ứng
-dụng/cửa sổ, nên chỉ gửi khi đã xem lại nội dung.
+Wayland client ghi log debug chính vào `/tmp/uk_debug.log`; khi bật biến này,
+WindowTracker còn ghi sự kiện đổi cửa sổ vào `/tmp/tracker.log` (không bật thì
+không ghi). Các log này có thể chứa tên ứng dụng/cửa sổ, nên chỉ gửi khi đã
+xem lại nội dung.
 
 ## Windows Edition
 

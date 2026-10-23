@@ -45,6 +45,9 @@ struct QueuedKeyEvent {
 
 struct PendingEdit {
     bool active = false;
+    // Key-event edits keep their order in the client, so later keys need not
+    // wait; only their intermediate surrounding-text reports are skipped.
+    bool blocks_input = true;
     uint64_t generation = 0;
     uint64_t timeout_token = 0;
     uint64_t repair_token = 0;
@@ -142,6 +145,9 @@ WindowTracker* g_windowTracker = nullptr;
 
 static bool g_app_excluded = false;
 static bool g_terminal_app = false;
+static bool g_key_event_app = false;
+
+static constexpr uint32_t kBackspaceKey = 14;
 
 static void reset_composition(WaylandState* state, bool clear_client_preedit = false) {
     Bamboo_Reset();
@@ -153,6 +159,10 @@ static void reset_composition(WaylandState* state, bool clear_client_preedit = f
 
 static bool has_fresh_surrounding(const WaylandState* state) {
     return state->has_surrounding_text && !state->pending_edit.active;
+}
+
+static bool input_blocked(const WaylandState* state) {
+    return state->pending_edit.active && state->pending_edit.blocks_input;
 }
 
 static void clear_pending_edit(WaylandState* state) {
@@ -188,10 +198,34 @@ static void arm_pending_timeout(WaylandState* state) {
 }
 
 static void schedule_queued_keys(WaylandState* state) {
-    if (!state->pending_edit.active && !state->queued_keys.empty() &&
+    if (!input_blocked(state) && !state->queued_keys.empty() &&
         state->drain_timer && !state->drain_timer->isActive()) {
         state->drain_timer->start();
     }
+}
+
+static void begin_composition(WaylandState* state) {
+    if (state->composed_word.empty() && state->has_surrounding_text &&
+        state->surrounding_cursor == state->surrounding_anchor &&
+        state->surrounding_cursor <= state->surrounding_text.size()) {
+        state->composition_start = {state->surrounding_text,
+                                    state->surrounding_cursor,
+                                    state->surrounding_anchor, true};
+    }
+}
+
+static SurroundingSnapshot current_surrounding(const WaylandState* state) {
+    if (!state->has_surrounding_text) return {};
+    return {state->surrounding_text, state->surrounding_cursor,
+            state->surrounding_anchor, true};
+}
+
+static void predict_surrounding(WaylandState* state,
+                                const SurroundingSnapshot& expected) {
+    if (!expected.valid) return;
+    state->surrounding_text = expected.text;
+    state->surrounding_cursor = expected.cursor;
+    state->surrounding_anchor = expected.anchor;
 }
 
 static void replace_native_composition(WaylandState* state,
@@ -207,14 +241,7 @@ static void replace_native_composition(WaylandState* state,
         return;
     }
 
-    if (old_composition.empty() && !new_composition.empty() &&
-        state->has_surrounding_text &&
-        state->surrounding_cursor == state->surrounding_anchor &&
-        state->surrounding_cursor <= state->surrounding_text.size()) {
-        state->composition_start = {state->surrounding_text,
-                                    state->surrounding_cursor,
-                                    state->surrounding_anchor, true};
-    }
+    if (!new_composition.empty()) begin_composition(state);
 
     SurroundingReplacement replacement;
     if (state->has_surrounding_text) {
@@ -312,6 +339,112 @@ static void arm_failed_edit_repair(WaylandState* state) {
         // Timer callbacks run outside the Wayland read notifier.
         wl_display_flush(state->display);
     });
+}
+
+// Chromium dispatches keydown only for keys that reach it as key events; a
+// commit alone becomes keypress/input. Pages that check typing against keydown
+// (10FastFingers) discard such text. Chromium, and so every Electron app, keeps
+// wl_keyboard keys and text-input commits in order, so send what a typist
+// would: the key itself, or Backspace followed by the new characters.
+static bool use_key_events(const WaylandState* state) {
+    // URL fields complete inline; keep the selection-aware replacement there.
+    return g_key_event_app && state->content_purpose != 5 &&
+           !(state->has_surrounding_text &&
+             state->surrounding_cursor != state->surrounding_anchor);
+}
+
+static void expect_key_event_text(WaylandState* state, const std::string& tail) {
+    remember_committed_tail(state, tail);
+    if (state->pending_edit.active && !state->pending_edit.blocks_input) {
+        state->pending_edit.expected_tail = tail;
+        arm_pending_timeout(state);
+    }
+}
+
+static void forward_key_text(WaylandState* state, uint32_t serial,
+                             uint32_t time, uint32_t key, uint32_t key_state,
+                             char c) {
+    zwp_input_method_context_v1_key(state->context, serial, time, key, key_state);
+    predict_surrounding(state, apply_forwarded_key(current_surrounding(state), c));
+}
+
+static void replace_with_key_events(WaylandState* state,
+                                    const std::string& next,
+                                    uint32_t serial, uint32_t time) {
+    const std::string old = state->composed_word;
+    const size_t common = utf8_common_prefix_bytes(old, next);
+    const std::string removed = old.substr(common);
+    const std::string inserted = next.substr(common);
+    if (removed.empty() && inserted.empty()) return;
+    if (!next.empty()) begin_composition(state);
+
+    for (size_t i = utf8_codepoint_count(removed); i > 0; --i) {
+        zwp_input_method_context_v1_key(state->context, serial, time,
+                                        kBackspaceKey, WL_KEYBOARD_KEY_STATE_PRESSED);
+        zwp_input_method_context_v1_key(state->context, serial, time,
+                                        kBackspaceKey, WL_KEYBOARD_KEY_STATE_RELEASED);
+    }
+    if (!inserted.empty()) {
+        zwp_input_method_context_v1_commit_string(
+            state->context, state->latest_serial, inserted.c_str());
+    }
+
+    const auto snapshot = current_surrounding(state);
+    SurroundingSnapshot expected;
+    if (snapshot.valid) {
+        expected = apply_surrounding_replacement(
+            snapshot.text, snapshot.cursor, snapshot.anchor,
+            make_surrounding_replacement(removed.size(), snapshot.text,
+                                         snapshot.cursor, snapshot.anchor),
+            inserted);
+    }
+    predict_surrounding(state, expected);
+    state->composed_word = next;
+    if (!removed.empty() && expected.valid) {
+        // The client reports the text between the Backspaces and the commit.
+        state->pending_edit = {};
+        state->pending_edit.active = true;
+        state->pending_edit.blocks_input = false;
+        state->pending_edit.generation = ++state->next_edit_generation;
+    }
+    expect_key_event_text(state, next);
+}
+
+static void type_with_key_events(WaylandState* state, const std::string& next,
+                                 char c, uint32_t serial, uint32_t time,
+                                 uint32_t key, uint32_t key_state) {
+    if (utf8_common_prefix_bytes(state->composed_word, next) <
+        state->composed_word.size()) {
+        // The key edits earlier text; its Backspaces provide the keydown.
+        replace_with_key_events(state, next, serial, time);
+        eaten_keys.insert(key);
+        return;
+    }
+    // Let the client insert the key, then fix a mapped key (Telex w -> ư).
+    begin_composition(state);
+    forward_key_text(state, serial, time, key, key_state, c);
+    state->composed_word.push_back(c);
+    if (state->composed_word != next) {
+        replace_with_key_events(state, next, serial, time);
+    } else {
+        expect_key_event_text(state, next);
+    }
+}
+
+// Chromium and Electron map their resource pack; Qt WebEngine ships its own,
+// and Qt reorders key events against commits, so it must not match.
+static bool maps_show_chromium(std::istream& maps) {
+    std::string line;
+    while (std::getline(maps, line)) {
+        if (line.find("/chrome_100_percent.pak") != std::string::npos) return true;
+    }
+    return false;
+}
+
+static bool is_chromium_process(long pid) {
+    if (pid <= 0) return false;
+    std::ifstream maps("/proc/" + std::to_string(pid) + "/maps");
+    return maps && maps_show_chromium(maps);
 }
 
 static std::string bamboo_string(bool final) {
@@ -472,6 +605,7 @@ static void process_keyboard_key(WaylandState* state, uint32_t serial,
                 reset_composition(state);
             }
 
+            const bool key_events = use_key_events(state);
             if (!Bamboo_CanProcessKey(c)) {
                 std::string final_word = bamboo_string(true);
                 const bool had_composition = !state->composed_word.empty();
@@ -483,6 +617,24 @@ static void process_keyboard_key(WaylandState* state, uint32_t serial,
                     if (macro != macros.end()) {
                         final_word = macro->second;
                     }
+                }
+
+                if (key_events) {
+                    if (had_composition) {
+                        replace_with_key_events(state, final_word, serial, time);
+                    }
+                    reset_composition(state);
+                    if (c == '\n') {
+                        // Enter may submit or clear the field.
+                        clear_pending_edit(state);
+                        zwp_input_method_context_v1_key(state->context, serial, time, key, state_key);
+                        return;
+                    }
+                    forward_key_text(state, serial, time, key, state_key, c);
+                    if (had_composition) {
+                        expect_key_event_text(state, final_word + c);
+                    }
+                    return;
                 }
 
                 if (had_composition && c != '\n') {
@@ -500,6 +652,11 @@ static void process_keyboard_key(WaylandState* state, uint32_t serial,
                 Bamboo_ProcessKey(c);
             }
 
+            if (key_events) {
+                type_with_key_events(state, bamboo_string(false), c, serial,
+                                     time, key, state_key);
+                return;
+            }
             replace_native_composition(state, bamboo_string(false));
             eaten_keys.insert(key);
             return;
@@ -518,10 +675,10 @@ static void route_keyboard_key(WaylandState* state, uint32_t serial,
                                uint32_t state_key, uint32_t modifiers) {
     if (!state->active || !state->context) return;
 
-    if (state->pending_edit.active || !state->queued_keys.empty()) {
-        if (state->queued_keys.size() < 512) {
-            state->queued_keys.push_back({serial, time, key, state_key, modifiers});
-        }
+    if (input_blocked(state) || !state->queued_keys.empty()) {
+        // Preserve releases as well as presses in a delayed input batch.
+        // The pending-edit timeout already recovers from a missing ACK.
+        state->queued_keys.push_back({serial, time, key, state_key, modifiers});
         schedule_queued_keys(state);
         return;
     }
@@ -530,7 +687,7 @@ static void route_keyboard_key(WaylandState* state, uint32_t serial,
 }
 
 static void drain_queued_keys(WaylandState* state) {
-    if (state->draining_keys || state->pending_edit.active ||
+    if (state->draining_keys || input_blocked(state) ||
         state->queued_keys.empty()) return;
     state->draining_keys = true;
     const auto event = state->queued_keys.front();
@@ -727,7 +884,10 @@ static void input_method_deactivate(void* data, struct zwp_input_method_v1* inpu
     reset_composition(state);
     state->has_surrounding_text = false;
     clear_pending_edit(state);
-    
+
+    // Do not send wl_keyboard.release: when KWin deactivates a context before
+    // our grab_keyboard arrives, it never creates the grab, and releasing that
+    // id is a protocol error that disconnects the input method.
     if (state->keyboard) {
         wl_proxy_destroy((struct wl_proxy*)state->keyboard);
         state->keyboard = nullptr;
@@ -823,9 +983,26 @@ int main(int argc, char **argv) {
             "org.gnome.console", "kgx", "xfce4-terminal", "lxterminal", "foot",
             "footclient", "wezterm", "org.wezfurlong.wezterm"};
         g_terminal_app = terminals.contains(appId);
+        const bool was_key_event_app = g_key_event_app;
+        const QStringList chromiumBrowsers = {"google-chrome", "google-chrome-beta",
+            "google-chrome-unstable", "chromium", "chromium-browser",
+            "org.chromium.chromium", "brave-browser", "com.brave.browser",
+            "microsoft-edge", "microsoft-edge-beta", "microsoft-edge-dev",
+            "com.microsoft.edge", "vivaldi", "vivaldi-stable", "com.vivaldi.vivaldi",
+            "opera", "com.opera.opera", "thorium-browser", "yandex-browser"};
+        // Electron apps have their own app IDs, so also look at the process
+        // the tracker reports last. Installed web apps use chrome-<id>-<profile>
+        // or crx_<id>; the names remain a fallback when /proc is not readable.
+        const long pid = windowClass.count("|||") >= 2
+            ? windowClass.section("|||", -1).toLong() : 0;
+        g_key_event_app = chromiumBrowsers.contains(appId) ||
+            appId.startsWith("chrome-") || appId.startsWith("crx_") ||
+            appId.startsWith("brave-") || appId.startsWith("msedge-") ||
+            is_chromium_process(pid);
         const bool was_excluded = g_app_excluded;
         g_app_excluded = windowTracker.isAppExcluded(windowClass.toStdString());
-        if (was_excluded != g_app_excluded || was_terminal != g_terminal_app) {
+        if (was_excluded != g_app_excluded || was_terminal != g_terminal_app ||
+            was_key_event_app != g_key_event_app) {
             state.queued_keys.clear();
             state.recent_tails.clear();
             if (state.drain_timer) state.drain_timer->stop();

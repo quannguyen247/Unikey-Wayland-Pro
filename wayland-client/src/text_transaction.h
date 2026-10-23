@@ -34,6 +34,15 @@ inline size_t utf8_common_prefix_bytes(const std::string& left, const std::strin
     return common;
 }
 
+// Bamboo emits precomposed text, so one Backspace removes one code point.
+inline size_t utf8_codepoint_count(const std::string& text) {
+    size_t count = 0;
+    for (unsigned char byte : text) {
+        if ((byte & 0xC0) != 0x80) ++count;
+    }
+    return count;
+}
+
 inline bool composition_matches_surrounding(const std::string& text,
                                             uint32_t cursor,
                                             uint32_t anchor,

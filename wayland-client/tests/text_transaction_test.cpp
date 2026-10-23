@@ -88,6 +88,11 @@ int main() {
         repair, toned_word);
     assert(repaired.valid && repaired.text == toned_word);
 
+    // One Backspace per code point of the replaced tail.
+    assert(utf8_codepoint_count("") == 0);
+    assert(utf8_codepoint_count("êt") == 2);
+    assert(utf8_codepoint_count("nguyễn") == 6);
+
     const SurroundingSnapshot committed{"nói ", 5, 5, true};
     const auto extra_space = apply_forwarded_key(committed, ' ');
     assert(extra_space.valid && extra_space.text == "nói  ");
