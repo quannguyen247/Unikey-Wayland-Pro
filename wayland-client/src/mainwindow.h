@@ -10,25 +10,31 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QLabel>
-#include <QCloseEvent>
 #include "macrodialog.h"
+#include "config.h"
 
+class QDBusServiceWatcher;
+
+// The settings window runs as its own program; it saves the options and asks
+// the running input method to reload them over D-Bus.
 class MainWindow : public QWidget {
     Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "io.github.ubuntu2310fake.UnikeyWayland.Settings")
 public:
-    explicit MainWindow(bool* p_viet_mode, bool is_gnome = false, QWidget *parent = nullptr);
-    void setVietMode(bool viet);
+    explicit MainWindow(bool is_gnome = false, QWidget *parent = nullptr);
 
-protected:
-    void closeEvent(QCloseEvent *event) override;
+public slots:
+    // A second launch asks this window to come forward.
+    Q_SCRIPTABLE void Raise();
 
 private slots:
     void applySettings();
     void onCloseClicked();
     void onMacroButtonClicked();
+    void onInputMethodButtonClicked();
+    void updateInputMethodButton();
 
 private:
-    bool* p_viet_mode;
     QTabWidget* m_tabWidget;
 
     // Cơ bản
@@ -46,26 +52,24 @@ private:
 
     // Hệ thống
     QCheckBox* m_showOnStartupCheck;
-    
+
     // Gõ tắt
     QCheckBox* m_macroWithConsonantCheck;
     QPushButton* m_macroTableBtn;
 
     QPushButton* m_closeBtn;
     QPushButton* m_defaultBtn;
+    QPushButton* m_inputMethodBtn;
+    QDBusServiceWatcher* m_inputMethodWatcher;
 
     // Config persistence
     void loadConfig();
     void saveConfig();
-    QString getConfigPath() const;
+    bool inputMethodRunning() const;
     bool m_loadingConfig = false;
     std::map<std::string, std::string> m_macros;
 
 public:
-    const std::map<std::string, std::string>& getMacros() const { return m_macros; }
-    bool isMacroEnabled() const { return m_macroCheck->isChecked(); }
-    int getSwitchKey() const { return m_evHotkeyCombo->currentIndex(); }
-
     // Preedit exclude/include apps list
     class QPlainTextEdit* m_preeditAppsTextEdit;
 

@@ -56,6 +56,7 @@ mkdir -p arch_pkg/usr/share/icons/hicolor/scalable/apps
 # 3. Sao chép các tệp tin cấu hình và binary
 echo ">>> Đang sao chép các tệp tin hệ thống..."
 cp wayland-client/build/unikey-wayland arch_pkg/usr/bin/
+cp wayland-client/build/unikey-wayland-settings arch_pkg/usr/bin/
 if [ -f wayland-client/build/ibus-engine-unikey-wayland ]; then
     cp wayland-client/build/ibus-engine-unikey-wayland arch_pkg/usr/libexec/
 fi
@@ -68,9 +69,11 @@ fi
 cp io.github.ubuntu2310fake.UnikeyWayland.desktop arch_pkg/usr/share/applications/
 cp io.github.ubuntu2310fake.UnikeyWayland.metainfo.xml arch_pkg/usr/share/metainfo/
 cp io.github.ubuntu2310fake.UnikeyWayland.svg arch_pkg/usr/share/icons/hicolor/scalable/apps/
+cp wayland-client/icons/unikey-wayland-v.svg wayland-client/icons/unikey-wayland-e.svg arch_pkg/usr/share/icons/hicolor/scalable/apps/
 
 # 4. Thay đổi quyền truy cập tiêu chuẩn
 chmod 755 arch_pkg/usr/bin/unikey-wayland
+chmod 755 arch_pkg/usr/bin/unikey-wayland-settings
 if [ -f arch_pkg/usr/libexec/ibus-engine-unikey-wayland ]; then
     chmod 755 arch_pkg/usr/libexec/ibus-engine-unikey-wayland
 fi

@@ -51,6 +51,8 @@ jobs:
           mkdir -p ~/rpmbuild/SOURCES
           mkdir -p ~/rpmbuild/SPECS
           cp wayland-client/build/unikey-wayland ~/rpmbuild/SOURCES/
+          cp wayland-client/build/unikey-wayland-settings ~/rpmbuild/SOURCES/
+          cp wayland-client/icons/unikey-wayland-v.svg wayland-client/icons/unikey-wayland-e.svg ~/rpmbuild/SOURCES/
           cp wayland-client/build/ibus-engine-unikey-wayland ~/rpmbuild/SOURCES/
           cp ibus-engine/unikey-wayland.xml ~/rpmbuild/SOURCES/
           cp ibus-engine/ibus-setup-unikey-wayland.desktop ~/rpmbuild/SOURCES/
@@ -123,6 +125,8 @@ jobs:
           mkdir -p ~/rpmbuild/SPECS
           mkdir -p releases
           cp wayland-client/build/unikey-wayland ~/rpmbuild/SOURCES/
+          cp wayland-client/build/unikey-wayland-settings ~/rpmbuild/SOURCES/
+          cp wayland-client/icons/unikey-wayland-v.svg wayland-client/icons/unikey-wayland-e.svg ~/rpmbuild/SOURCES/
           cp wayland-client/build/ibus-engine-unikey-wayland ~/rpmbuild/SOURCES/
           cp ibus-engine/unikey-wayland.xml ~/rpmbuild/SOURCES/
           cp ibus-engine/ibus-setup-unikey-wayland.desktop ~/rpmbuild/SOURCES/

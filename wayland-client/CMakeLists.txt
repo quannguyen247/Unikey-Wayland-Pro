@@ -42,11 +42,15 @@ add_custom_command(
 )
 add_custom_target(bamboo_target DEPENDS ${BAMBOO_LIB})
 
+# The input method stays on QtCore and QtDBus; the settings window is a
+# separate program so widgets are loaded only while it is open.
 set(UK_SOURCES
     src/trayicon.cpp
-    src/mainwindow.cpp
-    src/macrodialog.cpp
+    src/trayicon.h
     src/windowtracker.cpp
+    src/windowtracker.h
+    src/control.h
+    src/config.h
     src/main.cpp
     src/text_transaction.h
 )
@@ -65,10 +69,25 @@ target_compile_definitions(unikey-wayland PRIVATE _LINUX_)
 target_link_libraries(unikey-wayland PRIVATE
     PkgConfig::WAYLAND_CLIENT
     Qt6::Core
+    Qt6::DBus
+    ${BAMBOO_LIB}
+)
+
+add_executable(unikey-wayland-settings
+    src/settings_main.cpp
+    src/mainwindow.cpp
+    src/mainwindow.h
+    src/macrodialog.cpp
+    src/macrodialog.h
+    src/control.h
+    src/config.h
+)
+target_include_directories(unikey-wayland-settings PRIVATE src)
+target_link_libraries(unikey-wayland-settings PRIVATE
+    Qt6::Core
     Qt6::Gui
     Qt6::Widgets
     Qt6::DBus
-    ${BAMBOO_LIB}
 )
 
 # IBus backend for GNOME Wayland and X11 sessions.
@@ -88,7 +107,9 @@ if (IBUS_FOUND)
     install(FILES ../ibus-engine/ibus-setup-unikey-wayland.desktop DESTINATION share/applications)
 endif()
 
-install(TARGETS unikey-wayland DESTINATION bin)
+install(TARGETS unikey-wayland unikey-wayland-settings DESTINATION bin)
+install(FILES icons/unikey-wayland-v.svg icons/unikey-wayland-e.svg
+        DESTINATION share/icons/hicolor/scalable/apps)
 install(FILES ../io.github.ubuntu2310fake.UnikeyWayland.desktop DESTINATION share/applications)
 install(FILES ../io.github.ubuntu2310fake.UnikeyWayland.metainfo.xml DESTINATION share/metainfo)
 install(FILES ../io.github.ubuntu2310fake.UnikeyWayland.svg DESTINATION share/icons/hicolor/scalable/apps)
@@ -103,7 +124,7 @@ if (BUILD_TESTING)
     target_include_directories(deferred-input-test PRIVATE src ${CMAKE_CURRENT_BINARY_DIR} include)
     target_compile_definitions(deferred-input-test PRIVATE _LINUX_)
     target_link_libraries(deferred-input-test PRIVATE PkgConfig::WAYLAND_CLIENT
-        Qt6::Core Qt6::Gui Qt6::Widgets Qt6::DBus ${BAMBOO_LIB})
+        Qt6::Core Qt6::DBus ${BAMBOO_LIB})
     add_test(NAME deferred-input-test COMMAND deferred-input-test)
 
     add_executable(text-transaction-test tests/text_transaction_test.cpp)

@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
+#include <malloc.h>
+#include <functional>
 
 static void log_to_file(const std::string& msg) {
     static const bool enabled = [] {
@@ -23,10 +25,18 @@ static void log_to_file(const std::string& msg) {
     }
 }
 
-#include <QApplication>
+#include <QCoreApplication>
+#include <QDBusConnection>
+#include <QDBusConnectionInterface>
+#include <QDBusMessage>
+#include <QFileInfo>
+#include <QProcess>
 #include <QSocketNotifier>
+#include <QStandardPaths>
+#include <QThread>
 #include <QTimer>
-#include "mainwindow.h"
+#include "config.h"
+#include "control.h"
 #include "trayicon.h"
 
 #include "input-method-unstable-v1-client-protocol.h"
@@ -140,14 +150,19 @@ static bool g_shift_pressed = false;
 static bool g_alt_pressed = false;
 static bool g_other_pressed = false;
 
-static MainWindow* g_mainWindow = nullptr;
 WindowTracker* g_windowTracker = nullptr;
+static UkConfig g_config;
+// Updates the tray, the OSD and the saved mode; set by main().
+static std::function<void(bool)> g_viet_mode_changed;
 
 static bool g_app_excluded = false;
 static bool g_terminal_app = false;
 static bool g_key_event_app = false;
 
 static constexpr uint32_t kBackspaceKey = 14;
+
+// Restarted by every key; when typing pauses, freed memory goes back to the OS.
+static QTimer* g_idle_timer = nullptr;
 
 static void reset_composition(WaylandState* state, bool clear_client_preedit = false) {
     Bamboo_Reset();
@@ -454,14 +469,20 @@ static std::string bamboo_string(bool final) {
     return result;
 }
 
-void show_main_window() {
-    if (g_mainWindow) {
-        QMetaObject::invokeMethod(g_mainWindow, []() {
-            g_mainWindow->show();
-            g_mainWindow->raise();
-            g_mainWindow->activateWindow();
-        });
-    }
+static void set_viet_mode(WaylandState* state, bool viet) {
+    state->viet_mode = viet;
+    if (g_viet_mode_changed) g_viet_mode_changed(viet);
+}
+
+// The settings window is a separate program, so the input method never loads
+// a widget toolkit and only costs memory while the window is open.
+static QString settings_program() {
+    const QString local = QCoreApplication::applicationDirPath() + "/unikey-wayland-settings";
+    return QFileInfo::exists(local) ? local : QStringLiteral("unikey-wayland-settings");
+}
+
+static bool show_settings_window(const QStringList& args = {}) {
+    return QProcess::startDetached(settings_program(), args);
 }
 
 static void keyboard_keymap(void* data, struct wl_keyboard* keyboard, uint32_t format, int32_t fd, uint32_t size) {
@@ -496,15 +517,11 @@ static void process_keyboard_key(WaylandState* state, uint32_t serial,
             g_other_pressed = true;
         }
     } else if (state_key == 0) { // Released
-        int switchKeyConfig = g_mainWindow ? g_mainWindow->getSwitchKey() : 0;
+        const int switchKeyConfig = g_config.switchKey;
         if (key == 29 || key == 97) {
             if (switchKeyConfig == 0 && g_ctrl_pressed && g_shift_pressed && !g_other_pressed && !g_switched) {
                 reset_composition(state, true);
-                if (g_mainWindow) {
-                    g_mainWindow->setVietMode(!state->viet_mode);
-                } else {
-                    state->viet_mode = !state->viet_mode;
-                }
+                set_viet_mode(state, !state->viet_mode);
                 g_switched = true;
             }
             g_ctrl_pressed = false;
@@ -515,11 +532,7 @@ static void process_keyboard_key(WaylandState* state, uint32_t serial,
         } else if (key == 42 || key == 54) {
             if (switchKeyConfig == 0 && g_ctrl_pressed && g_shift_pressed && !g_other_pressed && !g_switched) {
                 reset_composition(state, true);
-                if (g_mainWindow) {
-                    g_mainWindow->setVietMode(!state->viet_mode);
-                } else {
-                    state->viet_mode = !state->viet_mode;
-                }
+                set_viet_mode(state, !state->viet_mode);
                 g_switched = true;
             }
             g_shift_pressed = false;
@@ -536,22 +549,18 @@ static void process_keyboard_key(WaylandState* state, uint32_t serial,
 
 
     // Alt + Z hotkey
-    int switchKeyConfig = g_mainWindow ? g_mainWindow->getSwitchKey() : 0;
+    const int switchKeyConfig = g_config.switchKey;
     bool real_alt_pressed = (modifiers & 8) != 0; // Better check to avoid sticky Alt bug
     if (switchKeyConfig == 1 && key == 44 && real_alt_pressed && state_key == 1) {
         reset_composition(state, true);
-        if (g_mainWindow) {
-            g_mainWindow->setVietMode(!state->viet_mode);
-        } else {
-            state->viet_mode = !state->viet_mode;
-        }
+        set_viet_mode(state, !state->viet_mode);
         eaten_keys.insert(key);
         return;
     }
 
     // Ctrl + Shift + F5 (CS+F5) hotkey to show settings
     if (key == 63 && g_ctrl_pressed && g_shift_pressed && state_key == 1) {
-        show_main_window();
+        show_settings_window();
         eaten_keys.insert(key);
         return;
     }
@@ -611,8 +620,8 @@ static void process_keyboard_key(WaylandState* state, uint32_t serial,
                 const bool had_composition = !state->composed_word.empty();
                 
                 // Gõ tắt (Macro)
-                if (g_mainWindow && g_mainWindow->isMacroEnabled()) {
-                    const auto& macros = g_mainWindow->getMacros();
+                if (g_config.macroEnabled) {
+                    const auto& macros = g_config.macros;
                     auto macro = macros.find(final_word);
                     if (macro != macros.end()) {
                         final_word = macro->second;
@@ -674,6 +683,7 @@ static void route_keyboard_key(WaylandState* state, uint32_t serial,
                                uint32_t time, uint32_t key,
                                uint32_t state_key, uint32_t modifiers) {
     if (!state->active || !state->context) return;
+    if (g_idle_timer) g_idle_timer->start();
 
     if (input_blocked(state) || !state->queued_keys.empty()) {
         // Preserve releases as well as presses in a delayed input batch.
@@ -923,8 +933,113 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
+static bool same_engine_config(const UkConfig& a, const UkConfig& b) {
+    return a.method == b.method && a.freeMarking == b.freeMarking &&
+           a.modernStyle == b.modernStyle && a.spellCheck == b.spellCheck &&
+           a.autoRestore == b.autoRestore;
+}
+
+static void apply_engine_config() {
+    Bamboo_SetInputMethod(g_config.method);
+    Bamboo_SetOptions(g_config.freeMarking, g_config.modernStyle,
+                      g_config.spellCheck, g_config.autoRestore);
+}
+
+static void show_mode_osd(bool viet) {
+    QDBusMessage msg = QDBusMessage::createMethodCall(
+        "org.kde.plasmashell", "/org/kde/osdService", "org.kde.osdService", "showText");
+    msg << QString("input-keyboard")
+        << QString(viet ? "UniKey: Tiếng Việt [V]" : "UniKey: Tiếng Anh [E]");
+    QDBusConnection::sessionBus().send(msg);
+}
+
+static QString kconfig_tool(const char* name) {
+    for (const char* version : {"6", "5"}) {
+        const QString tool = QString("%1%2").arg(name, version);
+        if (!QStandardPaths::findExecutable(tool).isEmpty()) return tool;
+    }
+    return {};
+}
+
+// KWin restarts the input method only after a crash, so after "Thoát bộ gõ"
+// it is started again the way System Settings does it: clear the configured
+// input method and restore it, each change announced to KWin's config watcher.
+static bool restart_input_method() {
+    const QString reader = kconfig_tool("kreadconfig");
+    const QString writer = kconfig_tool("kwriteconfig");
+    if (reader.isEmpty() || writer.isEmpty()) return false;
+
+    QProcess read;
+    read.start(reader, {"--file", "kwinrc", "--group", "Wayland", "--key", "InputMethod"});
+    if (!read.waitForFinished(3000)) return false;
+    const QString inputMethod = QString::fromUtf8(read.readAllStandardOutput()).trimmed();
+    // Leave another input method that the user picked alone.
+    if (!inputMethod.contains("UnikeyWayland") && !inputMethod.contains("unikey-wayland")) {
+        return false;
+    }
+
+    auto write = [&](const QString& value) {
+        return QProcess::execute(writer, {"--file", "kwinrc", "--group", "Wayland",
+                                          "--key", "InputMethod", "--notify", value}) == 0;
+    };
+    QDBusConnectionInterface* bus = QDBusConnection::sessionBus().interface();
+    for (int delay : {300, 1000}) {
+        if (!write(QString())) {
+            write(inputMethod);
+            return false;
+        }
+        // KWin rereads the file when the notification arrives; let it see "".
+        QThread::msleep(delay);
+        if (!write(inputMethod)) return false;
+        for (int i = 0; i < 30; ++i) {
+            if (bus && bus->isServiceRegistered(UK_DBUS_SERVICE)) return true;
+            QThread::msleep(100);
+        }
+    }
+    return false;
+}
+
+// Started without KWin's input-method socket, e.g. from the application menu.
+static int run_launcher(int argc, char** argv) {
+    QCoreApplication app(argc, argv);
+    const QStringList args = app.arguments().mid(1);
+    QStringList windowArgs;
+    if (args.contains("--exclude")) windowArgs << "--exclude";
+    const bool wantsWindow = !windowArgs.isEmpty() || args.contains("--setup") ||
+                             args.contains("--settings");
+
+    QDBusConnectionInterface* bus = QDBusConnection::sessionBus().interface();
+    const bool running = bus && bus->isServiceRegistered(UK_DBUS_SERVICE);
+    if (!running && !wantsWindow) {
+        if (restart_input_method()) {
+            std::cout << "Unikey-Wayland đã được bật lại." << std::endl;
+            return 0;
+        }
+        std::cerr << "Không bật lại được bộ gõ qua KWin; mở bảng điều khiển." << std::endl;
+    }
+    return show_settings_window(windowArgs) ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
-    Bamboo_Init();
+    // The Go runtime sizes itself before main runs. One processor keeps it to
+    // a few MiB instead of per-CPU caches and threads, so start over with it.
+    if (!getenv("GOMAXPROCS")) {
+        setenv("GOMAXPROCS", "1", 1);
+        // With transparent huge pages set to "always", the Go heap may be
+        // faulted in 2 MiB at a time, which doubles the input method's size.
+        const char* godebug = getenv("GODEBUG");
+        const std::string debug = godebug && *godebug
+            ? std::string(godebug) + ",disablethp=1" : "disablethp=1";
+        setenv("GODEBUG", debug.c_str(), 1);
+        // Exec the real path: the process is named after it (pkill, monitors).
+        char self[4096];
+        const ssize_t length = readlink("/proc/self/exe", self, sizeof(self) - 1);
+        if (length > 0) {
+            self[length] = '\0';
+            execv(self, argv);
+        }
+    }
+
     int im_socket_fd = -1;
     char* wayland_socket_env = getenv("WAYLAND_SOCKET");
     if (wayland_socket_env) {
@@ -932,12 +1047,18 @@ int main(int argc, char **argv) {
         im_socket_fd = dup(orig_fd);
         unsetenv("WAYLAND_SOCKET");
     }
+    if (im_socket_fd < 0) {
+        return run_launcher(argc, argv);
+    }
 
-    setenv("QT_QPA_PLATFORM", "wayland;xcb", 0); // Prefer Wayland, fallback to xcb.
-    QApplication app(argc, argv);
-    app.setQuitOnLastWindowClosed(false);
+    QCoreApplication app(argc, argv);
+
+    Bamboo_Init();
+    g_config = uk_load_config();
+    apply_engine_config();
 
     WaylandState state = {};
+    state.viet_mode = g_config.vietKey;
     QTimer drainTimer;
     drainTimer.setSingleShot(true);
     // Drain as soon as the event loop is idle. A 1 ms timer adds visible
@@ -947,31 +1068,30 @@ int main(int argc, char **argv) {
     QObject::connect(&drainTimer, &QTimer::timeout,
                      [&state]() { drain_queued_keys(&state); });
 
-    if (im_socket_fd >= 0) {
-        state.display = wl_display_connect_to_fd(im_socket_fd);
-    } else {
-        state.display = wl_display_connect(NULL);
-    }
+    QTimer idleTimer;
+    idleTimer.setSingleShot(true);
+    idleTimer.setInterval(10000);
+    g_idle_timer = &idleTimer;
+    QObject::connect(&idleTimer, &QTimer::timeout, []() {
+        Bamboo_ReleaseMemory();
+        malloc_trim(0);
+    });
+    // Start-up (D-Bus, tray, config) leaves garbage too.
+    idleTimer.start();
 
+    state.display = wl_display_connect_to_fd(im_socket_fd);
     if (!state.display) {
-        std::cerr << "Failed to connect to Wayland display. Running in GUI-only mode." << std::endl;
-    } else {
-        state.registry = wl_display_get_registry(state.display);
-        wl_registry_add_listener(state.registry, &registry_listener, &state);
-        wl_display_roundtrip(state.display);
+        std::cerr << "Failed to connect to the input method socket." << std::endl;
+        return 1;
     }
-
-    bool has_wayland_im = (state.input_method != nullptr);
-    if (state.display && !has_wayland_im) {
-        std::cerr << "Compositor does not support zwp_input_method_v1. Running in GUI-only mode." << std::endl;
-    } else if (state.display && has_wayland_im) {
-        zwp_input_method_v1_add_listener(state.input_method, &input_method_listener, &state);
+    state.registry = wl_display_get_registry(state.display);
+    wl_registry_add_listener(state.registry, &registry_listener, &state);
+    wl_display_roundtrip(state.display);
+    if (!state.input_method) {
+        std::cerr << "Compositor does not support zwp_input_method_v1." << std::endl;
+        return 1;
     }
-
-    bool is_gnome_edition = false;
-
-    MainWindow mainWindow(&state.viet_mode, is_gnome_edition);
-    g_mainWindow = &mainWindow;
+    zwp_input_method_v1_add_listener(state.input_method, &input_method_listener, &state);
 
     WindowTracker windowTracker;
     g_windowTracker = &windowTracker;
@@ -1019,56 +1139,72 @@ int main(int argc, char **argv) {
 
     windowTracker.injectKWinScript();
 
-    TrayIcon* trayIcon = new TrayIcon(&state.viet_mode, &mainWindow, false);
+    // A normal exit: KWin restarts the input method only when it crashes, so
+    // keys go straight to applications until it is started again.
+    auto quit = [&app]() {
+        log_to_file("DEBUG: quit requested");
+        app.quit();
+    };
+    auto toggle_mode = [&state]() {
+        reset_composition(&state, true);
+        set_viet_mode(&state, !state.viet_mode);
+    };
+    TrayIcon trayIcon(state.viet_mode,
+                      {toggle_mode, []() { show_settings_window(); }, quit});
+    g_viet_mode_changed = [&trayIcon](bool viet) {
+        trayIcon.setVietMode(viet);
+        uk_save_viet_mode(viet);
+        show_mode_osd(viet);
+    };
 
-    bool showExclude = false;
-    if (argc > 1) {
-        if (strcmp(argv[1], "--setup") == 0) {
-            mainWindow.show();
-        } else if (strcmp(argv[1], "--exclude") == 0) {
-            mainWindow.show();
-            showExclude = true;
-        }
-    }
-    if (showExclude) {
-        mainWindow.selectTab("Danh sách loại trừ");
-    }
-
-    log_to_file("Wayland IM v1 Client started with Qt GUI. Waiting for events...");
-
-    QSocketNotifier* waylandNotifier = nullptr;
-    if (state.display) {
-        waylandNotifier = new QSocketNotifier(
-            wl_display_get_fd(state.display), QSocketNotifier::Read, &app);
-        QObject::connect(waylandNotifier, &QSocketNotifier::activated,
-                         [&state, &app, waylandNotifier]() {
-            if (wl_display_dispatch(state.display) == -1) {
-                waylandNotifier->setEnabled(false);
-                std::cerr << "Wayland display disconnected or error." << std::endl;
-                app.quit();
-                return;
+    QObject control;
+    new ControlAdaptor(&control, {
+        [&state]() { return state.viet_mode; },
+        [&state, &windowTracker]() {
+            // The window owns these options; the current V/E mode stays.
+            const UkConfig previous = g_config;
+            g_config = uk_load_config();
+            // Saving the macro table or the app list must not break a word
+            // being typed, so restart the engine only when its options change.
+            if (!same_engine_config(previous, g_config)) {
+                reset_composition(&state, true);
+                apply_engine_config();
             }
-            while (wl_display_dispatch_pending(state.display) > 0) {}
-            wl_display_flush(state.display);
-        });
+            windowTracker.reloadExcludedApps();
+        },
+        []() { show_settings_window(); },
+        quit,
+    });
+    QDBusConnection::sessionBus().registerObject(UK_CONTROL_PATH, &control,
+                                                 QDBusConnection::ExportAdaptors);
+
+    log_to_file("Wayland IM v1 Client started. Waiting for events...");
+
+    QSocketNotifier waylandNotifier(wl_display_get_fd(state.display), QSocketNotifier::Read);
+    QObject::connect(&waylandNotifier, &QSocketNotifier::activated,
+                     [&state, &app, &waylandNotifier]() {
+        if (wl_display_dispatch(state.display) == -1) {
+            waylandNotifier.setEnabled(false);
+            std::cerr << "Wayland display disconnected or error." << std::endl;
+            app.quit();
+            return;
+        }
         while (wl_display_dispatch_pending(state.display) > 0) {}
         wl_display_flush(state.display);
-    }
+    });
+    while (wl_display_dispatch_pending(state.display) > 0) {}
+    wl_display_flush(state.display);
 
     int ret = app.exec();
 
+    g_viet_mode_changed = nullptr;
+    g_idle_timer = nullptr;
     if (state.keyboard) {
         wl_proxy_destroy((struct wl_proxy*)state.keyboard);
     }
     if (state.context) {
         zwp_input_method_context_v1_destroy(state.context);
     }
-    if (state.display) {
-        wl_display_disconnect(state.display);
-    }
-    if (trayIcon) {
-        delete trayIcon;
-    }
-
+    wl_display_disconnect(state.display);
     return ret;
 }

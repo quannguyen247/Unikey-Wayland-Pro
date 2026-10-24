@@ -88,7 +88,23 @@ source tree là IBus.
   delete/commit lệch transaction.
 - `Ctrl + Shift` (mặc định) hoặc `Alt + Z` để đổi E/V. `Ctrl + Shift + F5`
   mở bảng điều khiển; biểu tượng StatusNotifier của KDE hiển thị V/E và tự
-  đăng ký lại khi tray hoặc Plasma khởi động lại.
+  đăng ký lại khi tray hoặc Plasma khởi động lại. Bấm trái vào biểu tượng để
+  đổi E/V, bấm giữa để mở bảng điều khiển; menu chuột phải có
+  **Gõ tiếng Việt**, **Bảng điều khiển...** và **Thoát bộ gõ**.
+- Bộ gõ gồm hai chương trình. `unikey-wayland` là tiến trình nền do KWin
+  chạy, chỉ dùng QtCore + QtDBus và lõi Bamboo (khoảng 5–6 MB PSS);
+  `unikey-wayland-settings` là bảng điều khiển Qt Widgets, chỉ chạy khi được
+  mở và tự thoát khi đóng. Hai bên chỉ chia sẻ `~/UnikeyWayland/global.json`
+  và giao tiếp qua D-Bus (`io.github.ubuntu2310fake.UnikeyWayland`, đối tượng
+  `/Control`).
+- **Thoát bộ gõ** (menu khay hoặc nút trong bảng điều khiển) kết thúc tiến
+  trình nền một cách bình thường, nên KWin không tự bật lại và phím đi thẳng
+  vào ứng dụng. Mở lại *Unikey-Wayland* từ menu ứng dụng (hoặc chạy
+  `unikey-wayland`, hoặc bấm **Bật bộ gõ** trong bảng điều khiển) để bật lại:
+  chương trình xoá rồi khôi phục khoá `[Wayland] InputMethod` trong `kwinrc`
+  qua `kwriteconfig6 --notify` để KWin khởi động lại bộ gõ, giống cách System
+  Settings làm. Khi bộ gõ đang chạy, mở *Unikey-Wayland* sẽ mở bảng điều
+  khiển.
 - Khi đổi E/V, KDE OSD được gọi qua `org.kde.plasmashell`/
   `org.kde.osdService`.
 
@@ -103,7 +119,8 @@ source tree là IBus.
   passthrough.
 - Ô `Bật hội thoại này khi khởi động` được lưu trong cấu hình Wayland nhưng
   main loop Wayland hiện khởi động ẩn; mở giao diện bằng tray,
-  `Ctrl + Shift + F5`, `unikey-wayland --setup` hoặc `--exclude`. Windows
+  `Ctrl + Shift + F5`, `unikey-wayland-settings` (`--exclude` để mở thẳng tab
+  danh sách loại trừ), `unikey-wayland --setup` hoặc `--exclude`. Windows
   Edition mới dùng giá trị này để tự mở cửa sổ.
 - Một số ô giao diện được giữ lại cho tương thích nhưng chưa có đường xử lý
   tương ứng trong backend hiện tại (ví dụ lựa chọn restore hotkey riêng và

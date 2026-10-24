@@ -12,6 +12,9 @@ Source3:        io.github.ubuntu2310fake.UnikeyWayland.svg
 Source4:        ibus-engine-unikey-wayland
 Source5:        unikey-wayland.xml
 Source6:        ibus-setup-unikey-wayland.desktop
+Source7:        unikey-wayland-settings
+Source8:        unikey-wayland-v.svg
+Source9:        unikey-wayland-e.svg
 
 License:        GPL-2.0-or-later
 URL:            https://github.com/ubuntu2310fake/Unikey-Wayland
@@ -59,6 +62,8 @@ mkdir -p %{buildroot}/usr/share/icons/hicolor/scalable/apps
 
 # Copy our pre-compiled files from the SOURCES directory
 cp %{SOURCE0} %{buildroot}/usr/bin/unikey-wayland
+cp %{SOURCE7} %{buildroot}/usr/bin/unikey-wayland-settings
+cp %{SOURCE8} %{SOURCE9} %{buildroot}/usr/share/icons/hicolor/scalable/apps/
 cp %{SOURCE1} %{buildroot}/usr/share/applications/io.github.ubuntu2310fake.UnikeyWayland.desktop
 cp %{SOURCE2} %{buildroot}/usr/share/metainfo/io.github.ubuntu2310fake.UnikeyWayland.metainfo.xml
 cp %{SOURCE3} %{buildroot}/usr/share/icons/hicolor/scalable/apps/io.github.ubuntu2310fake.UnikeyWayland.svg
@@ -68,6 +73,9 @@ cp %{SOURCE6} %{buildroot}/usr/share/applications/ibus-setup-unikey-wayland.desk
 
 # Ensure correct permissions
 chmod 755 %{buildroot}/usr/bin/unikey-wayland
+chmod 755 %{buildroot}/usr/bin/unikey-wayland-settings
+chmod 644 %{buildroot}/usr/share/icons/hicolor/scalable/apps/unikey-wayland-v.svg
+chmod 644 %{buildroot}/usr/share/icons/hicolor/scalable/apps/unikey-wayland-e.svg
 chmod 755 %{buildroot}/usr/libexec/ibus-engine-unikey-wayland
 chmod 644 %{buildroot}/usr/share/applications/io.github.ubuntu2310fake.UnikeyWayland.desktop
 chmod 644 %{buildroot}/usr/share/metainfo/io.github.ubuntu2310fake.UnikeyWayland.metainfo.xml
@@ -77,6 +85,9 @@ chmod 644 %{buildroot}/usr/share/applications/ibus-setup-unikey-wayland.desktop
 
 %files
 /usr/bin/unikey-wayland
+/usr/bin/unikey-wayland-settings
+/usr/share/icons/hicolor/scalable/apps/unikey-wayland-v.svg
+/usr/share/icons/hicolor/scalable/apps/unikey-wayland-e.svg
 /usr/share/applications/io.github.ubuntu2310fake.UnikeyWayland.desktop
 /usr/share/metainfo/io.github.ubuntu2310fake.UnikeyWayland.metainfo.xml
 /usr/share/icons/hicolor/scalable/apps/io.github.ubuntu2310fake.UnikeyWayland.svg

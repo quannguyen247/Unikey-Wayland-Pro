@@ -97,6 +97,7 @@ extern void Bamboo_ProcessKey(uint32_t key);
 extern void Bamboo_RemoveLastChar(void);
 extern char* Bamboo_GetPreeditString(void);
 extern char* Bamboo_GetCommitString(void);
+extern void Bamboo_ReleaseMemory(void);
 extern void Bamboo_Reset(void);
 
 #ifdef __cplusplus

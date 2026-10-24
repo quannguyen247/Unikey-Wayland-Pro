@@ -4,6 +4,7 @@
 #undef main
 
 #include <sys/socket.h>
+#include <QTemporaryDir>
 
 static bool check_surrounding_echo(WaylandState* state) {
     bool passed = true;
@@ -229,6 +230,43 @@ static bool check_key_events(WaylandState* state, int peer) {
     return passed;
 }
 
+// The input method and the settings window are separate processes that share
+// ~/UnikeyWayland/global.json; neither may undo the other's keys.
+static bool check_config_ownership() {
+    bool passed = true;
+    auto check = [&](const char* name, bool ok) {
+        std::cout << name << ": " << ok << '\n';
+        passed = passed && ok;
+    };
+    QTemporaryDir home;
+    const QByteArray oldHome = qgetenv("HOME");
+    qputenv("HOME", home.path().toUtf8());
+
+    QFile legacy(uk_config_path());
+    QDir().mkpath(uk_config_dir());
+    legacy.open(QIODevice::WriteOnly);
+    legacy.write("{\"method\": 0, \"vietKey\": false, \"futureKey\": 7}");
+    legacy.close();
+    check("an unset method falls back to Telex", uk_load_config().method == 1);
+
+    UkConfig options = uk_load_config();
+    options.method = 2;
+    options.macros["ko"] = "không";
+    uk_save_options(options);
+    UkConfig saved = uk_load_config();
+    check("saving options keeps the input method's V/E mode", !saved.vietKey);
+    check("saving options keeps keys it does not know",
+          uk_read_config_object().value("futureKey").toInt() == 7);
+
+    uk_save_viet_mode(true);
+    saved = uk_load_config();
+    check("switching V/E keeps the window's options",
+          saved.vietKey && saved.method == 2 && saved.macros["ko"] == "không");
+
+    qputenv("HOME", oldHome);
+    return passed;
+}
+
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     int sockets[2];
@@ -246,6 +284,7 @@ int main(int argc, char** argv) {
     const bool surrounding_ok = check_surrounding_echo(&state);
     take_requests(&state, sockets[1]);
     const bool key_events_ok = check_key_events(&state, sockets[1]);
+    const bool config_ok = check_config_ownership();
     // Keep the synchronous probes separate from the timer-delivery checks.
     take_requests(&state, sockets[1]);
 
@@ -375,6 +414,6 @@ int main(int argc, char** argv) {
     wl_proxy_destroy(reinterpret_cast<wl_proxy*>(state.context));
     wl_display_disconnect(state.display);
     close(sockets[1]);
-    return surrounding_ok && key_events_ok && queued_ok && repair_ok &&
+    return surrounding_ok && key_events_ok && config_ok && queued_ok && repair_ok &&
            timeout_ok && burst_ok && burst_delivery_ok ? 0 : 1;
 }

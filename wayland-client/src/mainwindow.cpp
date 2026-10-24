@@ -18,11 +18,14 @@
 #include <QPlainTextEdit>
 #include <QDBusMessage>
 #include <QDBusConnection>
-#include "windowtracker.h"
-#include "libbamboo.h"
+#include <QDBusConnectionInterface>
+#include <QDBusServiceWatcher>
+#include <QCoreApplication>
+#include <QProcess>
+#include <QStandardPaths>
 
-MainWindow::MainWindow(bool* p_viet_mode, bool is_gnome, QWidget *parent)
-    : QWidget(parent), p_viet_mode(p_viet_mode) {
+MainWindow::MainWindow(bool is_gnome, QWidget *parent)
+    : QWidget(parent) {
     setWindowTitle("Unikey-Wayland");
     setFixedSize(450, 360);
 
@@ -157,8 +160,10 @@ MainWindow::MainWindow(bool* p_viet_mode, bool is_gnome, QWidget *parent)
     QHBoxLayout* btnLayout = new QHBoxLayout();
     m_defaultBtn = new QPushButton("Mặc định");
     m_closeBtn = new QPushButton("Đóng");
+    m_inputMethodBtn = new QPushButton();
     btnLayout->addWidget(m_defaultBtn);
     btnLayout->addStretch();
+    btnLayout->addWidget(m_inputMethodBtn);
     btnLayout->addWidget(m_closeBtn);
     mainLayout->addLayout(btnLayout);
 
@@ -175,27 +180,58 @@ MainWindow::MainWindow(bool* p_viet_mode, bool is_gnome, QWidget *parent)
     
     connect(m_macroTableBtn, &QPushButton::clicked, this, &MainWindow::onMacroButtonClicked);
     connect(m_closeBtn, &QPushButton::clicked, this, &MainWindow::onCloseClicked);
-    
+    connect(m_inputMethodBtn, &QPushButton::clicked, this, &MainWindow::onInputMethodButtonClicked);
+
+    // The button follows the input method as it quits or starts again.
+    m_inputMethodWatcher = new QDBusServiceWatcher(
+        UK_DBUS_SERVICE, QDBusConnection::sessionBus(),
+        QDBusServiceWatcher::WatchForRegistration | QDBusServiceWatcher::WatchForUnregistration, this);
+    connect(m_inputMethodWatcher, &QDBusServiceWatcher::serviceRegistered,
+            this, &MainWindow::updateInputMethodButton);
+    connect(m_inputMethodWatcher, &QDBusServiceWatcher::serviceUnregistered,
+            this, &MainWindow::updateInputMethodButton);
+    updateInputMethodButton();
+
     // Load persisted configuration
     loadConfig();
-
-    // Default config application to engine
-    applySettings();
 }
 
 void MainWindow::applySettings() {
-    int method = m_methodCombo->currentData().toInt();
-    int charset = m_charsetCombo->currentData().toInt();
-    
-    bool freeMarking = m_freeMarkingCheck->isChecked();
-    bool modernStyle = m_modernStyleCheck->isChecked();
-    bool autoRestore = m_autoRestoreCheck->isChecked();
-    bool spellCheck = m_spellCheckCheck->isChecked();
-
-    Bamboo_SetInputMethod(method);
-    Bamboo_SetOptions(freeMarking, modernStyle, spellCheck, autoRestore);
-
+    if (m_loadingConfig) return;
     saveConfig();
+    QDBusConnection::sessionBus().send(QDBusMessage::createMethodCall(
+        UK_DBUS_SERVICE, UK_CONTROL_PATH, UK_CONTROL_INTERFACE, "ReloadConfig"));
+}
+
+bool MainWindow::inputMethodRunning() const {
+    QDBusConnectionInterface* bus = QDBusConnection::sessionBus().interface();
+    return bus && bus->isServiceRegistered(UK_DBUS_SERVICE);
+}
+
+void MainWindow::updateInputMethodButton() {
+    m_inputMethodBtn->setText(inputMethodRunning() ? "Thoát bộ gõ" : "Bật bộ gõ");
+    m_inputMethodBtn->setEnabled(true);
+}
+
+void MainWindow::onInputMethodButtonClicked() {
+    m_inputMethodBtn->setEnabled(false);
+    if (inputMethodRunning()) {
+        QDBusConnection::sessionBus().send(QDBusMessage::createMethodCall(
+            UK_DBUS_SERVICE, UK_CONTROL_PATH, UK_CONTROL_INTERFACE, "Quit"));
+        return;
+    }
+    // Started without KWin's socket, the input method asks KWin to start it.
+    QString program = QCoreApplication::applicationDirPath() + "/unikey-wayland";
+    if (!QFileInfo::exists(program)) program = QStandardPaths::findExecutable("unikey-wayland");
+    if (program.isEmpty() || !QProcess::startDetached(program, {})) {
+        updateInputMethodButton();
+    }
+}
+
+void MainWindow::Raise() {
+    show();
+    raise();
+    activateWindow();
 }
 
 void MainWindow::onMacroButtonClicked() {
@@ -203,83 +239,31 @@ void MainWindow::onMacroButtonClicked() {
     dialog.setMacroTable(m_macros);
     if (dialog.exec() == QDialog::Accepted) {
         m_macros = dialog.getMacroTable();
-        // Không cần truyền xuống engine nữa
-        saveConfig();
+        applySettings();
     }
 }
 
 void MainWindow::onCloseClicked() {
-    hide();
-}
-
-void MainWindow::closeEvent(QCloseEvent *event) {
-    event->ignore();
-    hide();
-}
-
-void MainWindow::setVietMode(bool viet) {
-    if (p_viet_mode) *p_viet_mode = viet;
-    saveConfig();
-
-    QDBusMessage msg = QDBusMessage::createMethodCall(
-        "org.kde.plasmashell",
-        "/org/kde/osdService",
-        "org.kde.osdService",
-        "showText"
-    );
-    msg << QString("input-keyboard") << QString(viet ? "UniKey: Tiếng Việt [V]" : "UniKey: Tiếng Anh [E]");
-    QDBusConnection::sessionBus().send(msg);
-}
-
-QString MainWindow::getConfigPath() const {
-    return QDir::homePath() + "/UnikeyWayland/global.json";
+    close();
 }
 
 void MainWindow::loadConfig() {
     m_loadingConfig = true;
-    
-    QFile file(getConfigPath());
-    if (file.open(QIODevice::ReadOnly)) {
-        QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-        file.close();
-        if (doc.isObject()) {
-            QJsonObject obj = doc.object();
-            
-            // Set comboboxes
-            int method = obj.value("method").toInt(0);
-            int charset = obj.value("charset").toInt(0);
-            
-            int methodIdx = m_methodCombo->findData(method);
-            if (methodIdx != -1) m_methodCombo->setCurrentIndex(methodIdx);
-            
-            int charsetIdx = m_charsetCombo->findData(charset);
-            if (charsetIdx != -1) m_charsetCombo->setCurrentIndex(charsetIdx);
-            
-            // Set checkboxes
-            m_freeMarkingCheck->setChecked(obj.value("freeMarking").toBool(true));
-            m_modernStyleCheck->setChecked(obj.value("modernStyle").toBool(false));
-            m_autoRestoreCheck->setChecked(obj.value("autoRestore").toBool(false));
-            m_spellCheckCheck->setChecked(obj.value("spellCheck").toBool(false));
-            m_macroCheck->setChecked(obj.value("macroEnabled").toBool(false));
-            m_showOnStartupCheck->setChecked(obj.value("showOnStartup").toBool(true));
-            m_macroWithConsonantCheck->setChecked(obj.value("macroWithConsonant").toBool(false));
-            
-            // Hotkeys
-            int switchKey = obj.value("switchKey").toInt(0);
-            m_evHotkeyCombo->setCurrentIndex(switchKey);
-            
-            // E/V Mode
-            bool vietKey = obj.value("vietKey").toBool(true);
-            if (p_viet_mode) *p_viet_mode = vietKey;
 
-            // Load macros
-            m_macros.clear();
-            QJsonObject macroObj = obj.value("macros").toObject();
-            for (auto it = macroObj.begin(); it != macroObj.end(); ++it) {
-                m_macros[it.key().toStdString()] = it.value().toString().toStdString();
-            }
-        }
-    }
+    const UkConfig config = uk_load_config();
+    int methodIdx = m_methodCombo->findData(config.method);
+    if (methodIdx != -1) m_methodCombo->setCurrentIndex(methodIdx);
+    int charsetIdx = m_charsetCombo->findData(config.charset);
+    if (charsetIdx != -1) m_charsetCombo->setCurrentIndex(charsetIdx);
+    m_freeMarkingCheck->setChecked(config.freeMarking);
+    m_modernStyleCheck->setChecked(config.modernStyle);
+    m_autoRestoreCheck->setChecked(config.autoRestore);
+    m_spellCheckCheck->setChecked(config.spellCheck);
+    m_macroCheck->setChecked(config.macroEnabled);
+    m_showOnStartupCheck->setChecked(config.showOnStartup);
+    m_macroWithConsonantCheck->setChecked(config.macroWithConsonant);
+    m_evHotkeyCombo->setCurrentIndex(config.switchKey);
+    m_macros = config.macros;
 
     // Load preedit apps list
     QString preeditPath = QDir::homePath() + "/UnikeyWayland/preedit_apps.txt";
@@ -304,34 +288,19 @@ void MainWindow::loadConfig() {
 void MainWindow::saveConfig() {
     if (m_loadingConfig) return;
 
-    QString configPath = getConfigPath();
-    QDir().mkpath(QFileInfo(configPath).absolutePath());
-
-    QFile file(configPath);
-    if (file.open(QIODevice::WriteOnly)) {
-        QJsonObject obj;
-        obj["method"] = m_methodCombo->currentData().toInt();
-        obj["charset"] = m_charsetCombo->currentData().toInt();
-        obj["freeMarking"] = m_freeMarkingCheck->isChecked();
-        obj["modernStyle"] = m_modernStyleCheck->isChecked();
-        obj["autoRestore"] = m_autoRestoreCheck->isChecked();
-        obj["spellCheck"] = m_spellCheckCheck->isChecked();
-        obj["macroEnabled"] = m_macroCheck->isChecked();
-        obj["showOnStartup"] = m_showOnStartupCheck->isChecked();
-        obj["macroWithConsonant"] = m_macroWithConsonantCheck->isChecked();
-        obj["switchKey"] = m_evHotkeyCombo->currentIndex();
-        obj["vietKey"] = p_viet_mode ? *p_viet_mode : true;
-        
-        QJsonObject macroObj;
-        for (const auto& pair : m_macros) {
-            macroObj[QString::fromStdString(pair.first)] = QString::fromStdString(pair.second);
-        }
-        obj["macros"] = macroObj;
-        
-        QJsonDocument doc(obj);
-        file.write(doc.toJson());
-        file.close();
-    }
+    UkConfig config;
+    config.method = m_methodCombo->currentData().toInt();
+    config.charset = m_charsetCombo->currentData().toInt();
+    config.freeMarking = m_freeMarkingCheck->isChecked();
+    config.modernStyle = m_modernStyleCheck->isChecked();
+    config.autoRestore = m_autoRestoreCheck->isChecked();
+    config.spellCheck = m_spellCheckCheck->isChecked();
+    config.macroEnabled = m_macroCheck->isChecked();
+    config.showOnStartup = m_showOnStartupCheck->isChecked();
+    config.macroWithConsonant = m_macroWithConsonantCheck->isChecked();
+    config.switchKey = m_evHotkeyCombo->currentIndex();
+    config.macros = m_macros;
+    uk_save_options(config);
 
     // Save preedit apps list
     QString preeditPath = QDir::homePath() + "/UnikeyWayland/preedit_apps.txt";
@@ -339,11 +308,6 @@ void MainWindow::saveConfig() {
     if (preeditFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
         preeditFile.write(m_preeditAppsTextEdit->toPlainText().toUtf8());
         preeditFile.close();
-    }
-    
-    extern WindowTracker* g_windowTracker;
-    if (g_windowTracker) {
-        g_windowTracker->reloadExcludedApps();
     }
 }
 

@@ -7,8 +7,16 @@ package main
 */
 import "C"
 import (
+	"runtime/debug"
+
 	"github.com/BambooEngine/bamboo-core"
 )
+
+// The live heap is a few small tables. A low GC target keeps the input method
+// within a few MiB, and the cost is negligible at typing speed.
+func init() {
+	debug.SetGCPercent(25)
+}
 
 var preeditor bamboo.IEngine
 var currentMethod string = "Telex"
@@ -23,6 +31,8 @@ func initEngine(methodName string) {
 	im := bamboo.ParseInputMethod(defs, currentMethod)
 	preeditor = bamboo.NewEngine(im, currentFlags)
 	rawKeys = rawKeys[:0]
+	// Parsing every input method allocates far more than the engine keeps.
+	debug.FreeOSMemory()
 }
 
 //export Bamboo_Init
@@ -138,6 +148,13 @@ func Bamboo_GetPreeditString() *C.char {
 //export Bamboo_GetCommitString
 func Bamboo_GetCommitString() *C.char {
 	return C.CString(processedString(true))
+}
+
+// The scavenger keeps freed heap pages around; the input method is idle most
+// of the time, so hand them back once typing pauses.
+//export Bamboo_ReleaseMemory
+func Bamboo_ReleaseMemory() {
+	debug.FreeOSMemory()
 }
 
 //export Bamboo_Reset

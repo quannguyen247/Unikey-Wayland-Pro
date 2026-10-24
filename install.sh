@@ -56,21 +56,30 @@ wayland-scanner private-code protocols/input-method-unstable-v1.xml src/input-me
 "$MOC_BIN" src/macrodialog.h -o src/moc_macrodialog.cpp
 "$MOC_BIN" src/windowtracker.h -o src/moc_windowtracker.cpp
 "$MOC_BIN" src/trayicon.h -o src/moc_trayicon.cpp
+"$MOC_BIN" src/control.h -o src/moc_control.cpp
 
 mkdir -p "$HOME/.local/bin"
 gcc -c src/input-method-unstable-v1-protocol.c -Iinclude -o src/input-method-unstable-v1-protocol.o
-g++ -std=c++17 -O2 -D_LINUX -Isrc -Iinclude $(pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core Qt6DBus wayland-client) \
-  src/main.cpp src/mainwindow.cpp src/macrodialog.cpp src/windowtracker.cpp src/trayicon.cpp \
-  src/moc_mainwindow.cpp src/moc_macrodialog.cpp src/moc_trayicon.cpp src/moc_windowtracker.cpp \
+# Bộ gõ chỉ dùng QtCore + QtDBus để nhẹ; bảng điều khiển là chương trình riêng,
+# chỉ chạy khi được mở.
+g++ -std=c++17 -O2 -D_LINUX -Isrc -Iinclude $(pkg-config --cflags Qt6Core Qt6DBus wayland-client) \
+  src/main.cpp src/windowtracker.cpp src/trayicon.cpp \
+  src/moc_trayicon.cpp src/moc_windowtracker.cpp src/moc_control.cpp \
   src/input-method-unstable-v1-protocol.o src/libbamboo.a \
-  $(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6DBus wayland-client) -lpthread -lresolv \
+  $(pkg-config --libs Qt6Core Qt6DBus wayland-client) -lpthread -lresolv \
   -o "$HOME/.local/bin/unikey-wayland"
+g++ -std=c++17 -O2 -Isrc $(pkg-config --cflags Qt6Widgets Qt6Gui Qt6Core Qt6DBus) \
+  src/settings_main.cpp src/mainwindow.cpp src/macrodialog.cpp \
+  src/moc_mainwindow.cpp src/moc_macrodialog.cpp \
+  $(pkg-config --libs Qt6Widgets Qt6Gui Qt6Core Qt6DBus) \
+  -o "$HOME/.local/bin/unikey-wayland-settings"
 
 # 4. Install Desktop Entry, Icon & Configure KWin
 echo "✨ [4/4] Cài đặt Desktop Entry, Icon và kích hoạt KWin Virtual Keyboard..."
 mkdir -p "$HOME/.local/share/applications" "$HOME/.local/share/icons/hicolor/scalable/apps"
 cp "$REPO_DIR/io.github.ubuntu2310fake.UnikeyWayland.desktop" "$HOME/.local/share/applications/"
 cp "$REPO_DIR/io.github.ubuntu2310fake.UnikeyWayland.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/"
+cp "$CLIENT_DIR/icons/unikey-wayland-v.svg" "$CLIENT_DIR/icons/unikey-wayland-e.svg" "$HOME/.local/share/icons/hicolor/scalable/apps/"
 update-desktop-database "$HOME/.local/share/applications/" 2>/dev/null || true
 
 # Giữ danh sách legacy rỗng cho bản cài mới. Wayland client hiện tại luôn
